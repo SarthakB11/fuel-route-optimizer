@@ -9,7 +9,11 @@ import json
 import math
 from pathlib import Path
 
+import pytest
+
+from fuelroute import places
 from fuelroute.normalize import collapse_spaces_key, normalize_place_name
+from fuelroute.places import AmbiguousLocation, resolve_location
 
 DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
 STATIONS_PATH = DATA_DIR / "stations.json"
@@ -74,6 +78,42 @@ TOP_TWENTY_EXTRA_CITY_COORDINATES = {
 }
 
 MAX_CITY_CENTER_DRIFT_MILES = 30.0
+
+# Bare city names, with no state, that a caller has every right to expect back without
+# an argument, and the state each one has to land in. Some are nationally unique in the
+# index and some win on population dominance, see fuelroute.places._dominant_match.
+DOMINANT_BARE_CITY_NAMES = {
+    "Denver": "CO",
+    "Chicago": "IL",
+    "Seattle": "WA",
+    "Miami": "FL",
+    "Boston": "MA",
+    "Houston": "TX",
+    "Atlanta": "GA",
+    "Phoenix": "AZ",
+    "Dallas": "TX",
+}
+
+# Names where no single city dominates, so the resolver has to keep asking for a state.
+# Springfield is a three way tie in the six figures and Portland, Oregon is only 9.8
+# times Portland, Maine, just under the dominance ratio.
+AMBIGUOUS_BARE_CITY_NAMES = ("Springfield", "Portland")
+
+# Forms people type that carry a state without a tidy "City, ST" shape, checked against
+# the real index because the punctuation and the token splitting both depend on what the
+# gazetteer actually holds. Each value is the city and state key the input has to land on.
+UNTIDY_LOCATION_INPUTS = {
+    "Denver Colorado": "DENVER|CO",
+    "Denver CO": "DENVER|CO",
+    "Denver, CO.": "DENVER|CO",
+    "Salt Lake City Utah": "SALT LAKE CITY|UT",
+    "New York New York": "NEW YORK|NY",
+    "Charleston West Virginia": "CHARLESTON|WV",
+    "Washington, D.C.": "WASHINGTON|DC",
+    "Washington D.C.": "WASHINGTON|DC",
+    "St. Louis, MO": "SAINT LOUIS|MO",
+    "Ft. Worth, TX": "FORT WORTH|TX",
+}
 
 
 def load_stations() -> dict:
@@ -192,3 +232,40 @@ def test_normalize_place_name_documented_cases() -> None:
     assert normalize_place_name("Mt Vernon") == "MOUNT VERNON"
     assert normalize_place_name("Mc Calla") == "MC CALLA"
     assert collapse_spaces_key("Mc Calla") == "MCCALLA"
+
+
+@pytest.fixture
+def real_places_index(monkeypatch):
+    """Resolve against the committed index rather than whatever PLACE_DATA_FILE points at."""
+    monkeypatch.setattr(places, "DEFAULT_PLACE_DATA_FILE", PLACES_PATH)
+    places._load_index.cache_clear()
+    yield
+    places._load_index.cache_clear()
+
+
+def test_dominant_bare_city_names_resolve_against_the_real_index(real_places_index) -> None:
+    by_city_state = load_places()["by_city_state"]
+    for city, state in DOMINANT_BARE_CITY_NAMES.items():
+        expected = by_city_state[f"{normalize_place_name(city)}|{state}"]
+        assert resolve_location(city) == tuple(expected), f"{city} did not resolve to {state}"
+
+
+def test_genuinely_ambiguous_bare_city_names_still_raise(real_places_index) -> None:
+    for city in AMBIGUOUS_BARE_CITY_NAMES:
+        with pytest.raises(AmbiguousLocation):
+            resolve_location(city)
+
+
+def test_every_by_city_entry_carries_a_population() -> None:
+    """The fourth element is what the dominance rule reads, so no entry may be missing it."""
+    for name, entries in load_places()["by_city"].items():
+        for entry in entries:
+            assert len(entry) == 4, f"{name} entry {entry} is missing its population"
+            assert isinstance(entry[3], int)
+            assert entry[3] >= 0
+
+
+def test_untidy_location_inputs_resolve_against_the_real_index(real_places_index) -> None:
+    by_city_state = load_places()["by_city_state"]
+    for text, key in UNTIDY_LOCATION_INPUTS.items():
+        assert resolve_location(text) == tuple(by_city_state[key]), f"{text} did not reach {key}"

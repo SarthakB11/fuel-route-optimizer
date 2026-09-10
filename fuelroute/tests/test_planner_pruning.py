@@ -55,7 +55,7 @@ def test_pruning_keeps_stations_that_are_merely_close() -> None:
     assert [c.station.stop_id for c in pruned] == ["a", "b", "c"]
 
 
-def test_pruning_drops_candidates_at_or_beyond_the_destination() -> None:
+def test_pruning_drops_candidates_beyond_the_destination() -> None:
     """A station past the end cannot be stopped at, and would break feasibility.
 
     The resampled polyline is slightly shorter than the distance the routing provider
@@ -63,10 +63,22 @@ def test_pruning_drops_candidates_at_or_beyond_the_destination() -> None:
     happening to stay true.
     """
     pruned = _prune_candidates(
-        [_candidate("a", 0.0, 3.5), _candidate("b", 400.0, 3.0), _candidate("c", 500.0, 1.0)],
+        [_candidate("a", 0.0, 3.5), _candidate("b", 400.0, 3.0), _candidate("c", 500.1, 1.0)],
         500.0,
     )
     assert [c.station.stop_id for c in pruned] == ["a", "b"]
+
+
+def test_pruning_keeps_a_candidate_exactly_at_the_destination() -> None:
+    """The destination offset itself must survive, or short trips lose every station.
+
+    On a trip shorter than the corridor is wide, every station nearby projects onto
+    the route's final point. Dropping that offset emptied the candidate list and
+    turned a tenth of a mile across a city into "no stations within 12.0 miles of the
+    route", which is both wrong and unhelpful.
+    """
+    pruned = _prune_candidates([_candidate("a", 0.1, 3.5)], 0.1)
+    assert [c.station.stop_id for c in pruned] == ["a"]
 
 
 def test_pruning_preserves_offset_order() -> None:

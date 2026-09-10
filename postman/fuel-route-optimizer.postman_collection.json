@@ -1,7 +1,7 @@
 {
   "info": {
     "name": "Fuel Route Optimizer",
-    "description": "Worked examples for the fuel route optimizer API. Set the collection variable base_url if the service is not on http://127.0.0.1:8000.\n\nRun the requests top to bottom. The coast to coast example forces several fuel stops, and running it twice in a row demonstrates the cache: the second call reports external_api_calls 0 and returns in single digit milliseconds.",
+    "description": "Worked examples for the fuel route optimizer API. Set the collection variable base_url if the service is not on http://127.0.0.1:8000.\n\nRun the requests top to bottom. The coast to coast example forces twenty fuel stops, and running it twice in a row demonstrates the cache: the second call reports external_api_calls 0 and returns in single digit milliseconds.\n\nEvery 200 body carries map_url, an absolute link to the browser map for the same trip, and request.start and request.finish each carry snapped_to_road_miles, how far the routing provider moved the point to reach a road. and every stop carries leg_miles, the distance driven since the previous stop. The route line is thinned by default; request 3b asks for the provider's full geometry and shows the two vertex counts.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
@@ -19,8 +19,14 @@
         "header": [],
         "url": {
           "raw": "{{base_url}}/api/v1/health",
-          "host": ["{{base_url}}"],
-          "path": ["api", "v1", "health"]
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "api",
+            "v1",
+            "health"
+          ]
         },
         "description": "Confirms the service is up and reports how many stations are loaded and when the dataset was generated."
       },
@@ -52,7 +58,11 @@
               "});",
               "pm.test('gallons match distance at the stated mpg', () =>",
               "    pm.expect(body.fuel_plan.total_gallons * body.request.mpg)",
-              "      .to.be.closeTo(body.route.distance_miles, 1.0));",
+              "      .to.be.closeTo(body.route.distance_miles, 0.5));",
+              "pm.test('map_url is an absolute link to /map', () =>\n    pm.expect(body.map_url).to.match(/^https?:\\/\\/.+\\/map\\?/));",
+              "pm.test('leg_miles sums to the distance', () => {\n    const legs = body.fuel_plan.stops.reduce((a, s) => a + s.leg_miles, 0);\n    const last = body.fuel_plan.stops[body.fuel_plan.stops.length - 1].offset_miles;\n    pm.expect(legs + (body.route.distance_miles - last)).to.be.closeTo(body.route.distance_miles, 0.5);\n});",
+              "pm.test('route line is thinned by default', () =>\n    pm.expect(body.route.geometry_vertices).to.be.below(body.route.source_vertices));",
+              "pm.test('endpoints were not moved to reach a road', () => {\n    pm.expect(body.request.start.snapped_to_road_miles).to.be.below(5);\n    pm.expect(body.request.finish.snapped_to_road_miles).to.be.below(5);\n});",
               "console.log('stops', body.fuel_plan.stop_count,",
               "            'cost $' + body.fuel_plan.total_cost_usd,",
               "            'total_ms', body.performance.total_ms);"
@@ -65,11 +75,23 @@
         "header": [],
         "url": {
           "raw": "{{base_url}}/api/v1/route-plan?start=Seattle, WA&finish=Miami, FL",
-          "host": ["{{base_url}}"],
-          "path": ["api", "v1", "route-plan"],
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "api",
+            "v1",
+            "route-plan"
+          ],
           "query": [
-            { "key": "start", "value": "Seattle, WA" },
-            { "key": "finish", "value": "Miami, FL" }
+            {
+              "key": "start",
+              "value": "Seattle, WA"
+            },
+            {
+              "key": "finish",
+              "value": "Miami, FL"
+            }
           ]
         },
         "description": "About 3,300 miles, so a 500 mile tank forces at least seven fill ups. Seattle has stations within the origin radius, so origin_price_source reports the cheapest station near the origin."
@@ -99,14 +121,76 @@
         "header": [],
         "url": {
           "raw": "{{base_url}}/api/v1/route-plan?start=Seattle, WA&finish=Miami, FL",
-          "host": ["{{base_url}}"],
-          "path": ["api", "v1", "route-plan"],
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "api",
+            "v1",
+            "route-plan"
+          ],
           "query": [
-            { "key": "start", "value": "Seattle, WA" },
-            { "key": "finish", "value": "Miami, FL" }
+            {
+              "key": "start",
+              "value": "Seattle, WA"
+            },
+            {
+              "key": "finish",
+              "value": "Miami, FL"
+            }
           ]
         },
         "description": "The identical request a second time. The plan is memoised, so this makes no external call and returns in single digit milliseconds."
+      },
+      "response": []
+    },
+    {
+      "name": "3b. Seattle to Miami with geometry=full (same plan, every vertex)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const body = pm.response.json();",
+              "pm.test('full geometry returns every provider vertex', () =>",
+              "    pm.expect(body.route.geometry_vertices).to.eql(body.route.source_vertices));",
+              "pm.test('the plan is unchanged by the geometry choice', () =>",
+              "    pm.expect(body.fuel_plan.total_cost_usd).to.eql(1026.29));",
+              "console.log('vertices', body.route.geometry_vertices, 'body bytes', pm.response.responseSize);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/api/v1/route-plan?start=Seattle, WA&finish=Miami, FL&geometry=full",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "api",
+            "v1",
+            "route-plan"
+          ],
+          "query": [
+            {
+              "key": "start",
+              "value": "Seattle, WA"
+            },
+            {
+              "key": "finish",
+              "value": "Miami, FL"
+            },
+            {
+              "key": "geometry",
+              "value": "full"
+            }
+          ]
+        },
+        "description": "The same trip asking for the provider's own 35,438 vertices instead of the 3,396 the default keeps. Compare the response size with request 2: the plan, the stops and the cost are identical, only the line is heavier."
       },
       "response": []
     },
@@ -117,11 +201,23 @@
         "header": [],
         "url": {
           "raw": "{{base_url}}/api/v1/route-plan?start=Los Angeles, CA&finish=New York, NY",
-          "host": ["{{base_url}}"],
-          "path": ["api", "v1", "route-plan"],
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "api",
+            "v1",
+            "route-plan"
+          ],
           "query": [
-            { "key": "start", "value": "Los Angeles, CA" },
-            { "key": "finish", "value": "New York, NY" }
+            {
+              "key": "start",
+              "value": "Los Angeles, CA"
+            },
+            {
+              "key": "finish",
+              "value": "New York, NY"
+            }
           ]
         },
         "description": "About 2,800 miles. The price file carries no truck stop within 25 miles of Los Angeles, so origin_price_source reports that the departure price came from the nearest station along the route instead. The assumptions block in the response says so explicitly."
@@ -135,11 +231,23 @@
         "header": [],
         "url": {
           "raw": "{{base_url}}/api/v1/route-plan?start=Chicago, IL&finish=Houston, TX",
-          "host": ["{{base_url}}"],
-          "path": ["api", "v1", "route-plan"],
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "api",
+            "v1",
+            "route-plan"
+          ],
           "query": [
-            { "key": "start", "value": "Chicago, IL" },
-            { "key": "finish", "value": "Houston, TX" }
+            {
+              "key": "start",
+              "value": "Chicago, IL"
+            },
+            {
+              "key": "finish",
+              "value": "Houston, TX"
+            }
           ]
         },
         "description": "About 1,090 miles through dense truck stop country, so the optimiser has plenty of choice."
@@ -153,14 +261,56 @@
         "header": [],
         "url": {
           "raw": "{{base_url}}/api/v1/route-plan?start=39.7392,-104.9903&finish=39.0997,-94.5786",
-          "host": ["{{base_url}}"],
-          "path": ["api", "v1", "route-plan"],
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "api",
+            "v1",
+            "route-plan"
+          ],
           "query": [
-            { "key": "start", "value": "39.7392,-104.9903" },
-            { "key": "finish", "value": "39.0997,-94.5786" }
+            {
+              "key": "start",
+              "value": "39.7392,-104.9903"
+            },
+            {
+              "key": "finish",
+              "value": "39.0997,-94.5786"
+            }
           ]
         },
         "description": "Denver to Kansas City given as raw coordinates. Both forms resolve locally with no geocoding call."
+      },
+      "response": []
+    },
+    {
+      "name": "6b. Bare city names (population dominance)",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/api/v1/route-plan?start=Denver&finish=Chicago",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "api",
+            "v1",
+            "route-plan"
+          ],
+          "query": [
+            {
+              "key": "start",
+              "value": "Denver"
+            },
+            {
+              "key": "finish",
+              "value": "Chicago"
+            }
+          ]
+        },
+        "description": "No state given. Denver resolves to Colorado because it outweighs the Denvers in Iowa, North Carolina and Pennsylvania by more than ten to one in population. Try start=Springfield to see the 400 that names the states when no namesake dominates."
       },
       "response": []
     },
@@ -171,14 +321,35 @@
         "header": [],
         "url": {
           "raw": "{{base_url}}/api/v1/route-plan?start=Denver, CO&finish=Chicago, IL&range_miles=250&mpg=6.5&corridor_miles=25",
-          "host": ["{{base_url}}"],
-          "path": ["api", "v1", "route-plan"],
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "api",
+            "v1",
+            "route-plan"
+          ],
           "query": [
-            { "key": "start", "value": "Denver, CO" },
-            { "key": "finish", "value": "Chicago, IL" },
-            { "key": "range_miles", "value": "250" },
-            { "key": "mpg", "value": "6.5" },
-            { "key": "corridor_miles", "value": "25" }
+            {
+              "key": "start",
+              "value": "Denver, CO"
+            },
+            {
+              "key": "finish",
+              "value": "Chicago, IL"
+            },
+            {
+              "key": "range_miles",
+              "value": "250"
+            },
+            {
+              "key": "mpg",
+              "value": "6.5"
+            },
+            {
+              "key": "corridor_miles",
+              "value": "25"
+            }
           ]
         },
         "description": "A loaded truck rather than the default vehicle: half the range and 6.5 mpg, which roughly doubles the number of stops and the cost."
@@ -206,11 +377,23 @@
         "header": [],
         "url": {
           "raw": "{{base_url}}/api/v1/route-plan?start=Nowhereville, ZZ&finish=Miami, FL",
-          "host": ["{{base_url}}"],
-          "path": ["api", "v1", "route-plan"],
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "api",
+            "v1",
+            "route-plan"
+          ],
           "query": [
-            { "key": "start", "value": "Nowhereville, ZZ" },
-            { "key": "finish", "value": "Miami, FL" }
+            {
+              "key": "start",
+              "value": "Nowhereville, ZZ"
+            },
+            {
+              "key": "finish",
+              "value": "Miami, FL"
+            }
           ]
         },
         "description": "An unresolvable place returns 400 with a message naming the input, never a stack trace."
@@ -224,12 +407,27 @@
         "header": [],
         "url": {
           "raw": "{{base_url}}/api/v1/route-plan?start=Denver, CO&finish=Chicago, IL&mpg=0",
-          "host": ["{{base_url}}"],
-          "path": ["api", "v1", "route-plan"],
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "api",
+            "v1",
+            "route-plan"
+          ],
           "query": [
-            { "key": "start", "value": "Denver, CO" },
-            { "key": "finish", "value": "Chicago, IL" },
-            { "key": "mpg", "value": "0" }
+            {
+              "key": "start",
+              "value": "Denver, CO"
+            },
+            {
+              "key": "finish",
+              "value": "Chicago, IL"
+            },
+            {
+              "key": "mpg",
+              "value": "0"
+            }
           ]
         },
         "description": "Zero mpg is rejected by validation with a field level detail."

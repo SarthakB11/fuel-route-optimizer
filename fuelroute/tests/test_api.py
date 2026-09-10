@@ -8,6 +8,9 @@ fixtures written to tmp_path, never the real committed 6626 row dataset.
 from __future__ import annotations
 
 import json
+import logging
+import math
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from django.core.cache import cache
@@ -24,6 +27,17 @@ ROUTE_COORDS = [
     (36.0, -97.0),
     (36.0, -96.0),
     (36.0, -95.0),
+]
+
+# The same trip as ROUTE_COORDS, but wandering the way a road does instead of
+# running dead straight, so simplification has something to remove. Kept separate
+# because the station matching tests depend on ROUTE_COORDS staying a straight line.
+ZIGZAG_COORDS = [
+    (
+        36.0 + 0.03 * math.sin(step / 399 * 40.0) + 0.005 * math.sin(step / 399 * 300.0),
+        -100.0 + step / 399 * 5.0,
+    )
+    for step in range(400)
 ]
 
 PLACES_PAYLOAD = {
@@ -127,7 +141,14 @@ ROWS_BEYOND_RADIUS = [
 class _FakeFetchRoute:
     """Stands in for fuelroute.routing.fetch_route, counting how often it runs."""
 
-    def __init__(self, coordinates=ROUTE_COORDS, distance_miles=None, duration_seconds=3600.0):
+    def __init__(
+        self,
+        coordinates=ROUTE_COORDS,
+        distance_miles=None,
+        duration_seconds=3600.0,
+        origin_snap_miles=0.0,
+        destination_snap_miles=0.0,
+    ):
         self.coordinates = tuple(coordinates)
         self.distance_miles = (
             distance_miles
@@ -135,6 +156,8 @@ class _FakeFetchRoute:
             else geo.cumulative_miles(list(self.coordinates))[-1]
         )
         self.duration_seconds = duration_seconds
+        self.origin_snap_miles = origin_snap_miles
+        self.destination_snap_miles = destination_snap_miles
         self.call_count = 0
 
     def __call__(self, origin, destination, *, session=None):
@@ -146,6 +169,8 @@ class _FakeFetchRoute:
             provider="OSRM",
             api_calls=1,
             elapsed_ms=1.5,
+            origin_snap_miles=self.origin_snap_miles,
+            destination_snap_miles=self.destination_snap_miles,
         )
 
 
@@ -560,3 +585,421 @@ def test_departure_kind_is_keyed_on_the_offset_not_the_list_position(
         expected = "departure_fill_up" if stop["offset_miles"] == 0.0 else "en_route"
         assert stop["kind"] == expected
     assert sum(1 for stop in stops if stop["kind"] == "departure_fill_up") <= 1
+
+
+def test_geometry_is_simplified_by_default_and_reports_both_counts(
+    client, configure_dataset, monkeypatch
+) -> None:
+    """The default body carries a drawable line, not the provider's raw vertex dump."""
+    configure_dataset(ROWS_WITHIN_RADIUS)
+    monkeypatch.setattr(routing, "fetch_route", _FakeFetchRoute(coordinates=ZIGZAG_COORDS))
+
+    response = client.get(
+        _plan_url(start="Origin City, OK", finish="Finish City, AR", corridor_miles=15)
+    )
+    assert response.status_code == 200
+    route = response.json()["route"]
+
+    assert route["source_vertices"] == len(ZIGZAG_COORDS)
+    assert route["geometry_vertices"] < route["source_vertices"]
+    assert route["geometry_vertices"] == len(route["geometry"]["coordinates"])
+    assert response.json()["request"]["geometry"] == "simplified"
+    assert "0.02" in response.json()["assumptions"]["simplification"]
+
+
+def test_geometry_full_returns_every_vertex_the_provider_sent(
+    client, configure_dataset, monkeypatch
+) -> None:
+    configure_dataset(ROWS_WITHIN_RADIUS)
+    monkeypatch.setattr(routing, "fetch_route", _FakeFetchRoute(coordinates=ZIGZAG_COORDS))
+
+    response = client.get(
+        _plan_url(
+            start="Origin City, OK", finish="Finish City, AR", corridor_miles=15, geometry="full"
+        )
+    )
+    assert response.status_code == 200
+    route = response.json()["route"]
+    assert route["geometry_vertices"] == route["source_vertices"] == len(ZIGZAG_COORDS)
+
+
+def test_geometry_does_not_move_the_stops(client, configure_dataset, monkeypatch) -> None:
+    """Simplification touches the response geometry and nothing else.
+
+    Station matching runs against the full resampled polyline, so the plan a caller
+    gets must not depend on which geometry they asked for.
+    """
+    configure_dataset(ROWS_WITHIN_RADIUS)
+    monkeypatch.setattr(routing, "fetch_route", _FakeFetchRoute(coordinates=ZIGZAG_COORDS))
+
+    plans = []
+    for geometry in ("simplified", "full"):
+        response = client.get(
+            _plan_url(
+                start="Origin City, OK",
+                finish="Finish City, AR",
+                corridor_miles=15,
+                geometry=geometry,
+            )
+        )
+        assert response.status_code == 200
+        plans.append(response.json()["fuel_plan"])
+    assert plans[0] == plans[1]
+
+
+def test_unknown_geometry_choice_returns_400(client, configure_dataset, monkeypatch) -> None:
+    configure_dataset(ROWS_WITHIN_RADIUS)
+    monkeypatch.setattr(routing, "fetch_route", _FakeFetchRoute())
+
+    response = client.get(
+        _plan_url(start="Origin City, OK", finish="Finish City, AR", geometry="nonsense")
+    )
+    assert response.status_code == 400
+    assert "geometry" in response.json()["detail"]
+
+
+def test_geometry_choice_is_part_of_the_cache_key(client, configure_dataset, monkeypatch) -> None:
+    """A cached simplified body must never be served to a caller asking for full.
+
+    The cached payload carries the geometry that was returned, so the choice has to
+    be in the key. Without it the second request here would be a hit and would hand
+    back the thinned line under a full request.
+    """
+    configure_dataset(ROWS_WITHIN_RADIUS)
+    fake = _FakeFetchRoute(coordinates=ZIGZAG_COORDS)
+    monkeypatch.setattr(routing, "fetch_route", fake)
+
+    first = client.get(
+        _plan_url(start="Origin City, OK", finish="Finish City, AR", corridor_miles=15)
+    )
+    assert first.status_code == 200
+    assert first.json()["performance"]["cache"] == "miss"
+    assert fake.call_count == 1
+
+    second = client.get(
+        _plan_url(
+            start="Origin City, OK", finish="Finish City, AR", corridor_miles=15, geometry="full"
+        )
+    )
+    assert second.status_code == 200
+    assert second.json()["performance"]["cache"] == "miss"
+    assert fake.call_count == 2
+    route = second.json()["route"]
+    assert route["geometry_vertices"] == route["source_vertices"] == len(ZIGZAG_COORDS)
+
+
+def test_map_url_is_absolute_and_round_trips_the_query(
+    client, configure_dataset, monkeypatch
+) -> None:
+    configure_dataset(ROWS_WITHIN_RADIUS)
+    monkeypatch.setattr(routing, "fetch_route", _FakeFetchRoute())
+
+    params = {"start": "Origin City, OK", "finish": "Finish City, AR", "corridor_miles": 15}
+    response = client.get(_plan_url(**params))
+    assert response.status_code == 200
+
+    parts = urlsplit(response.json()["map_url"])
+    assert parts.scheme
+    assert parts.netloc
+    assert parts.path == "/map"
+    round_tripped = parse_qs(parts.query)
+    for key, value in params.items():
+        assert round_tripped[key] == [str(value)]
+
+
+def test_leg_miles_is_the_distance_driven_since_the_previous_stop(
+    client, configure_dataset, monkeypatch
+) -> None:
+    configure_dataset(ROWS_WITHIN_RADIUS)
+    monkeypatch.setattr(routing, "fetch_route", _FakeFetchRoute())
+
+    # A tank short enough to force a second stop, so consecutive legs can be checked
+    # against consecutive offsets rather than against the whole trip.
+    response = client.get(
+        _plan_url(
+            start="Origin City, OK",
+            finish="Finish City, AR",
+            corridor_miles=15,
+            range_miles=150,
+        )
+    )
+    assert response.status_code == 200
+    body = response.json()
+    stops = body["fuel_plan"]["stops"]
+    assert len(stops) >= 2
+
+    # The first leg is measured from the origin, so it is the offset itself.
+    assert stops[0]["leg_miles"] == stops[0]["offset_miles"]
+
+    for earlier, later in zip(stops, stops[1:], strict=False):
+        expected = later["offset_miles"] - earlier["offset_miles"]
+        # Both fields are rounded from full precision offsets independently, so the
+        # difference of two rounded offsets can sit half a display unit away.
+        assert later["leg_miles"] == pytest.approx(expected, abs=0.11)
+
+    driven = sum(stop["leg_miles"] for stop in stops)
+    final_leg = body["route"]["distance_miles"] - stops[-1]["offset_miles"]
+    assert driven + final_leg == pytest.approx(body["route"]["distance_miles"], abs=0.2)
+
+
+def test_identical_start_and_finish_never_calls_the_routing_provider(
+    client, configure_dataset, monkeypatch
+) -> None:
+    """A trip of no miles is answered without spending the request's one external call."""
+    configure_dataset(ROWS_WITHIN_RADIUS)
+    fake = _FakeFetchRoute()
+    monkeypatch.setattr(routing, "fetch_route", fake)
+
+    response = client.get(_plan_url(start="Origin City, OK", finish="Origin City, OK"))
+    assert response.status_code == 200
+    assert fake.call_count == 0
+
+    body = response.json()
+    assert body["route"]["distance_miles"] == 0.0
+    assert body["fuel_plan"]["stops"] == []
+    assert body["fuel_plan"]["stop_count"] == 0
+    assert body["fuel_plan"]["total_cost_usd"] == 0.0
+    assert body["fuel_plan"]["total_gallons"] == 0.0
+    assert body["performance"]["external_api_calls"] == 0
+    assert body["performance"]["cache"] == "miss"
+    assert "coincide" in body["assumptions"]["trivial_route"]
+
+
+def test_a_trivial_route_is_never_served_from_the_cache(
+    client, configure_dataset, monkeypatch
+) -> None:
+    """Repeating it stays a miss with no calls, because it is not worth storing."""
+    configure_dataset(ROWS_WITHIN_RADIUS)
+    fake = _FakeFetchRoute()
+    monkeypatch.setattr(routing, "fetch_route", fake)
+
+    url = _plan_url(start="Origin City, OK", finish="Origin City, OK")
+    for _ in range(2):
+        body = client.get(url).json()
+        assert body["performance"]["cache"] == "miss"
+        assert body["performance"]["external_api_calls"] == 0
+    assert fake.call_count == 0
+
+
+def test_an_overlong_start_is_rejected_as_a_field_error(client, configure_dataset) -> None:
+    """A pasted document is a bad parameter, not something to echo back in a message."""
+    configure_dataset(ROWS_WITHIN_RADIUS)
+
+    response = client.get(_plan_url(start="A" * 300, finish="Finish City, AR"))
+    assert response.status_code == 400
+    assert "start" in response.json()["detail"]
+
+
+def test_a_completed_plan_logs_one_structured_line(
+    client, configure_dataset, monkeypatch, caplog
+) -> None:
+    """One line per plan, carrying coordinates rather than the caller's query text."""
+    configure_dataset(ROWS_WITHIN_RADIUS)
+    monkeypatch.setattr(routing, "fetch_route", _FakeFetchRoute())
+
+    with caplog.at_level(logging.INFO, logger="fuelroute.planner"):
+        response = client.get(
+            _plan_url(start="Origin City, OK", finish="Finish City, AR", corridor_miles=15)
+        )
+    assert response.status_code == 200
+
+    records = [r for r in caplog.records if r.name == "fuelroute.planner"]
+    assert len(records) == 1
+    message = records[0].getMessage()
+    assert message.startswith("route-plan start=(36.0, -100.0) finish=(36.0, -95.0)")
+    for field in ("distance_miles=", "stops=", "total_cost_usd=", "cache=miss"):
+        assert field in message
+    # The query text is user input and must stay out of the log.
+    assert "Origin City" not in message
+
+
+def test_a_cache_hit_logs_its_own_line_with_no_routing_time(
+    client, configure_dataset, monkeypatch, caplog
+) -> None:
+    configure_dataset(ROWS_WITHIN_RADIUS)
+    monkeypatch.setattr(routing, "fetch_route", _FakeFetchRoute())
+    url = _plan_url(start="Origin City, OK", finish="Finish City, AR", corridor_miles=15)
+
+    client.get(url)
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="fuelroute.planner"):
+        assert client.get(url).status_code == 200
+
+    records = [r for r in caplog.records if r.name == "fuelroute.planner"]
+    assert len(records) == 1
+    message = records[0].getMessage()
+    assert "cache=hit" in message
+    assert "routing_ms=0" in message
+
+
+# A trip of a tenth of a mile, shorter than any corridor setting is wide, with one
+# station about a third of a mile off it. Every station this close projects onto the
+# route's final point, which is the case that used to be pruned away entirely.
+TINY_ROUTE_COORDS = [(39.7392, -104.9903), (39.7406, -104.9903)]
+
+# Deliberately a whisker under the polyline's own great circle length, which is what
+# OSRM does: it reported 0.49026 miles for a route whose resampled polyline measured
+# 0.49031. Pruning candidates against the provider's smaller number is what used to
+# discard every station on a trip this short.
+TINY_ROUTE_MILES = geo.cumulative_miles(TINY_ROUTE_COORDS)[-1] - 5e-5
+
+TINY_ROWS = [
+    {
+        "stop_id": "T1",
+        "name": "Downtown Pump",
+        "address": "1 MAIN ST",
+        "city": "Origin City",
+        "state": "OK",
+        "latitude": 39.7449,
+        "longitude": -104.9903,
+        "price_per_gallon": 3.00,
+    }
+]
+
+# Far enough from the route that no corridor the API accepts can reach it, which is
+# what a region with no coverage in the price file looks like.
+ROWS_NOWHERE_NEAR = [
+    {
+        "stop_id": "N1",
+        "name": "Distant Pump",
+        "address": "US-1",
+        "city": "Far City",
+        "state": "TX",
+        "latitude": 33.0,
+        "longitude": -100.0,
+        "price_per_gallon": 3.00,
+    }
+]
+
+# About 21 miles off the route: outside a 1 mile corridor, inside the 50 mile
+# ceiling, so a wider corridor really would find it.
+ROWS_JUST_OUTSIDE = [
+    {
+        "stop_id": "J1",
+        "name": "Outside Pump",
+        "address": "US-2",
+        "city": "Origin City",
+        "state": "OK",
+        "latitude": 36.3,
+        "longitude": -99.0,
+        "price_per_gallon": 3.00,
+    }
+]
+
+
+def test_a_trip_shorter_than_the_corridor_still_gets_a_plan(
+    client, configure_dataset, monkeypatch
+) -> None:
+    """A tenth of a mile across a city is a valid trip, not a 422.
+
+    Every station near a route this short projects onto its final point. Pruning that
+    offset threw away every candidate and answered with "no stations within 12.0 miles
+    of the route", which is both wrong and impossible to act on.
+    """
+    configure_dataset(TINY_ROWS)
+    monkeypatch.setattr(
+        routing,
+        "fetch_route",
+        _FakeFetchRoute(coordinates=TINY_ROUTE_COORDS, distance_miles=TINY_ROUTE_MILES),
+    )
+
+    response = client.get(_plan_url(start="39.7392,-104.9903", finish="39.7406,-104.9903"))
+    assert response.status_code == 200
+
+    body = response.json()
+    stops = body["fuel_plan"]["stops"]
+    assert len(stops) == 1
+    assert stops[0]["kind"] == "departure_fill_up"
+    assert stops[0]["gallons"] == pytest.approx(body["route"]["distance_miles"] / 10.0, abs=0.001)
+    assert stops[0]["gallons"] > 0
+
+
+def test_a_region_with_no_coverage_says_no_corridor_can_help(
+    client, configure_dataset, monkeypatch
+) -> None:
+    """Telling a caller to widen the corridor is bad advice where there is nothing to find."""
+    configure_dataset(ROWS_NOWHERE_NEAR)
+    monkeypatch.setattr(routing, "fetch_route", _FakeFetchRoute())
+
+    response = client.get(_plan_url(start="Origin City, OK", finish="Finish City, AR"))
+    assert response.status_code == 422
+    error = response.json()["error"]
+    assert "no stations within 50 miles" in error.lower()
+    assert "no corridor setting can make it feasible" in error
+
+
+def test_a_narrow_corridor_says_how_many_a_wider_one_would_find(
+    client, configure_dataset, monkeypatch
+) -> None:
+    """When widening would work, the advice comes with the number that proves it."""
+    configure_dataset(ROWS_JUST_OUTSIDE)
+    monkeypatch.setattr(routing, "fetch_route", _FakeFetchRoute())
+
+    response = client.get(
+        _plan_url(start="Origin City, OK", finish="Finish City, AR", corridor_miles=1)
+    )
+    assert response.status_code == 422
+    error = response.json()["error"]
+    assert "No fuel stations lie within 1.0 miles of the route." in error
+    assert "1 lie within 50 miles" in error
+
+
+def test_snap_distances_are_reported_and_default_to_zero(
+    client, configure_dataset, monkeypatch
+) -> None:
+    configure_dataset(ROWS_WITHIN_RADIUS)
+    monkeypatch.setattr(routing, "fetch_route", _FakeFetchRoute())
+
+    response = client.get(
+        _plan_url(start="Origin City, OK", finish="Finish City, AR", corridor_miles=15)
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["request"]["start"]["snapped_to_road_miles"] == 0.0
+    assert body["request"]["finish"]["snapped_to_road_miles"] == 0.0
+    assert "snapped_endpoint" not in body["assumptions"]
+
+
+def test_a_far_snapped_endpoint_is_called_out_in_the_assumptions(
+    client, configure_dataset, monkeypatch
+) -> None:
+    """Coordinates in the ocean get a real route from the coast, and must say so.
+
+    Without this the caller sees a perfectly plausible plan and no hint that it starts
+    somewhere they did not ask for.
+    """
+    configure_dataset(ROWS_WITHIN_RADIUS)
+    monkeypatch.setattr(
+        routing,
+        "fetch_route",
+        _FakeFetchRoute(origin_snap_miles=42.4, destination_snap_miles=0.2),
+    )
+
+    response = client.get(
+        _plan_url(start="Origin City, OK", finish="Finish City, AR", corridor_miles=15)
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["request"]["start"]["snapped_to_road_miles"] == 42.4
+    assert body["request"]["finish"]["snapped_to_road_miles"] == 0.2
+
+    note = body["assumptions"]["snapped_endpoint"]
+    assert "the start by 42.4 miles" in note
+    # The finish moved a fifth of a mile, which is ordinary and not worth saying.
+    assert "the finish" not in note
+
+
+def test_gallons_survive_a_round_trip_at_an_extreme_mpg(
+    client, configure_dataset, monkeypatch
+) -> None:
+    """Two decimal places on gallons is four miles of fuel at mpg=1000."""
+    configure_dataset(ROWS_WITHIN_RADIUS)
+    monkeypatch.setattr(routing, "fetch_route", _FakeFetchRoute())
+
+    response = client.get(
+        _plan_url(start="Origin City, OK", finish="Finish City, AR", corridor_miles=15, mpg=1000)
+    )
+    assert response.status_code == 200
+    body = response.json()
+    recovered = body["fuel_plan"]["total_gallons"] * 1000.0
+    assert recovered == pytest.approx(body["route"]["distance_miles"], abs=1.0)

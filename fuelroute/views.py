@@ -18,6 +18,7 @@ from typing import Any
 
 from django.conf import settings
 from django.shortcuts import redirect, render
+from django.urls import reverse
 from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -40,6 +41,19 @@ def _error_response(message: str, status_code: int, detail: Any = None) -> Respo
     return Response(body, status=status_code)
 
 
+def _map_url(request: Request) -> str:
+    """The absolute URL of the browser map for this same request.
+
+    The endpoint is asked for a map of the route and answers with data, which is the
+    right answer for a program and a poor one for a person. This carries the caller's
+    own query string over to the map page, so the link plans the identical trip and
+    nothing has to be reassembled by hand.
+    """
+    path = reverse("map")
+    query = request.query_params.urlencode()
+    return request.build_absolute_uri(f"{path}?{query}" if query else path)
+
+
 class RoutePlanView(APIView):
     """GET /api/v1/route-plan, the cheapest fuel stop plan between two US locations."""
 
@@ -58,6 +72,7 @@ class RoutePlanView(APIView):
                 mpg=params["mpg"],
                 corridor_miles=params["corridor_miles"],
                 initial_fuel_miles=params["initial_fuel_miles"],
+                geometry=params["geometry"],
             )
         except LocationError as exc:
             return _error_response(str(exc), 400)
@@ -73,7 +88,8 @@ class RoutePlanView(APIView):
             return _error_response(str(exc), 422)
 
         total_ms = (time.perf_counter() - started) * 1000
-        return Response(build_response_payload(result, total_ms), status=200)
+        payload = build_response_payload(result, total_ms, map_url=_map_url(request))
+        return Response(payload, status=200)
 
 
 @functools.lru_cache(maxsize=1)

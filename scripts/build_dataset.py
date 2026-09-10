@@ -75,6 +75,12 @@ assert len(VALID_STATES) == 51, "50 states plus DC"  # noqa: S101
 # latter is exactly the alternate name places.json needs to index.
 STATE_ABBREVIATION_KEYS: frozenset[str] = VALID_STATES
 
+# places.json is written with one line per city rather than one line per number: an
+# indented json.dumps puts every coordinate on its own line and inflates the file by
+# roughly a third for no gain in readability. A value is only broken across lines when
+# it lists several cities or when the single line would run past this many characters.
+PLACES_LINE_WIDTH = 79
+
 GEONAMES_COLUMNS = [
     "geonameid", "name", "asciiname", "alternatenames", "latitude", "longitude",
     "feature_class", "feature_code", "country_code", "cc2", "admin1_code",
@@ -383,15 +389,20 @@ def build_places_payload(
     GeoNames primary name for the city is "New York City". Setting
     alt_names_for_all_stations also indexes alternates for every station city regardless
     of population. Measured on the committed data: with it off, 9606 alternate keys are
-    added and places.json is 3,217,371 bytes. With it on, the roughly 3200 station cities
-    below the population floor add about 15400 more keys, historical names and alternate
+    added and places.json is 2,657,183 bytes. With it on, the roughly 3200 station cities
+    below the population floor add 15397 more keys, historical names and alternate
     spellings that are mostly noise rather than colloquial forms anyone is likely to type,
-    growing the file to 5,074,447 bytes. It defaults to False so the file stays under the
-    4 MB budget; every station city's own CSV name is indexed regardless, through the
-    station entries added below.
+    growing the file to 4,178,161 bytes, a hair under the 4 MB budget for keys nobody is
+    going to type. It defaults to False; every station city's own CSV name is indexed
+    regardless, through the station entries added below.
+
+    Each by_city entry carries the GeoNames population as its fourth element so the
+    runtime resolver can pick the dominant namesake for a bare city name. A station city
+    that GeoNames does not list under the same normalised key gets 0, which simply leaves
+    it unable to win a dominance contest.
     """
-    # (name_key, state) -> (latitude, longitude, population or None for station only rows)
-    merged: dict[tuple[str, str], tuple[float, float, int | None]] = {}
+    # (name_key, state) -> (latitude, longitude, population)
+    merged: dict[tuple[str, str], tuple[float, float, int]] = {}
     for (state, name_key), entry in gazetteer.all_places.items():
         if entry.population >= min_place_population:
             merged[(state, name_key)] = (entry.latitude, entry.longitude, entry.population)
@@ -401,7 +412,13 @@ def build_places_payload(
         if not name_key:
             continue
         station_keys.add((item.stop.state, name_key))
-        merged[(item.stop.state, name_key)] = (item.latitude, item.longitude, None)
+        # The station coordinate wins over the gazetteer one, but the gazetteer
+        # population is still the best number available for this key. A stop geocoded
+        # through the collapsed name, alternate name or override tier has no entry
+        # under this key at all, so it keeps a population of 0.
+        gazetteer_entry = gazetteer.all_places.get((item.stop.state, name_key))
+        population = gazetteer_entry.population if gazetteer_entry is not None else 0
+        merged[(item.stop.state, name_key)] = (item.latitude, item.longitude, population)
 
     # Second pass: alternate GeoNames names, so a colloquial input like "New York, NY"
     # resolves even though the GeoNames primary name is "New York City". A place's own
@@ -439,10 +456,10 @@ def build_places_payload(
         alt_keys_added += 1
 
     by_city_state: dict[str, list[float]] = {}
-    by_city: dict[str, list[list[float | str]]] = {}
-    for (state, name_key), (latitude, longitude, _population) in merged.items():
+    by_city: dict[str, list[list[float | str | int]]] = {}
+    for (state, name_key), (latitude, longitude, population) in merged.items():
         by_city_state[f"{name_key}|{state}"] = [latitude, longitude]
-        by_city.setdefault(name_key, []).append([latitude, longitude, state])
+        by_city.setdefault(name_key, []).append([latitude, longitude, state, population])
     for entries in by_city.values():
         entries.sort(key=lambda entry: entry[2])
 
@@ -452,6 +469,36 @@ def build_places_payload(
         "state_names": dict(sorted(STATE_NAMES.items())),
     }
     return payload, alt_keys_added
+
+
+def _format_places_value(key: str, value: Any) -> str:
+    """Render one `"key": value` line of places.json, wrapping only when it has to."""
+    inline = f"    {json.dumps(key)}: {json.dumps(value)}"
+    if not isinstance(value, list):
+        return inline
+    # A city list holds one [latitude, longitude, state, population] row per state, and
+    # is always broken up when it holds more than one so a diff points at the state that
+    # changed. A coordinate pair stays on one continuation line, since splitting a
+    # latitude from its longitude helps nobody.
+    lists_cities = bool(value) and isinstance(value[0], list)
+    if len(inline) <= PLACES_LINE_WIDTH and not (lists_cities and len(value) > 1):
+        return inline
+    if lists_cities:
+        body = ",\n".join(f"      {json.dumps(item)}" for item in value)
+    else:
+        body = "      " + ", ".join(json.dumps(item) for item in value)
+    return f"    {json.dumps(key)}: [\n{body}\n    ]"
+
+
+def format_places_json(payload: dict[str, dict[str, Any]]) -> str:
+    """Serialise the places index compactly, see PLACES_LINE_WIDTH for the wrapping rule."""
+    sections = []
+    for section_name in sorted(payload):
+        rows = ",\n".join(
+            _format_places_value(key, value) for key, value in sorted(payload[section_name].items())
+        )
+        sections.append(f"  {json.dumps(section_name)}: {{\n{rows}\n  }}")
+    return "{\n" + ",\n".join(sections) + "\n}\n"
 
 
 def print_summary(
@@ -532,7 +579,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help=(
             "Also index GeoNames alternate names for every station city regardless of "
-            "population. Pushes places.json well past 4 MB, off by default."
+            "population. Grows places.json to about 4.2 MB, off by default."
         ),
     )
     parser.add_argument(
@@ -583,11 +630,9 @@ def main(argv: list[str] | None = None) -> int:
 
     args.stations_out.parent.mkdir(parents=True, exist_ok=True)
     args.stations_out.write_text(
-        json.dumps(stations_payload, indent=1, sort_keys=True) + "\n", encoding="utf-8"
+        json.dumps(stations_payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
-    args.places_out.write_text(
-        json.dumps(places_payload, indent=1, sort_keys=True) + "\n", encoding="utf-8"
-    )
+    args.places_out.write_text(format_places_json(places_payload), encoding="utf-8")
 
     row_tiers = row_level_tier_report(us_rows, gazetteer, overrides)
     stop_tiers = {"exact": 0, "space_collapsed": 0, "alternate": 0, "override": 0}

@@ -21,3 +21,6 @@ build/
 data/geonames/
 *.zip
 US.txt
+
+# Type checker cache
+.mypy_cache/

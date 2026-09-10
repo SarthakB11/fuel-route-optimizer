@@ -164,3 +164,115 @@ class RoutePointIndex:
         if best_index is None or best_distance > max_miles:
             return None
         return self._cumulative[best_index], best_distance
+
+
+def perpendicular_offset_miles(
+    point: tuple[float, float],
+    start: tuple[float, float],
+    end: tuple[float, float],
+) -> float:
+    """Distance in miles from a point to the segment start-end.
+
+    The local flat earth metric: latitude scales by a constant, longitude by
+    cos(latitude) taken once at the midpoint of the segment. Over the few miles a
+    simplification tolerance cares about that is indistinguishable from a great
+    circle, and it costs two multiplications rather than four trigonometric calls.
+
+    This is the definition simplify_polyline works to. That function inlines the
+    same arithmetic in its inner loop, because a coast to coast polyline runs the
+    loop hundreds of thousands of times and a Python call per iteration is the
+    dominant cost.
+    """
+    lon_scale = _miles_per_degree_longitude((start[0] + end[0]) / 2)
+    origin_x = start[1] * lon_scale
+    origin_y = start[0] * MILES_PER_DEGREE_LATITUDE
+    seg_x = end[1] * lon_scale - origin_x
+    seg_y = end[0] * MILES_PER_DEGREE_LATITUDE - origin_y
+    point_x = point[1] * lon_scale - origin_x
+    point_y = point[0] * MILES_PER_DEGREE_LATITUDE - origin_y
+
+    seg_length_sq = seg_x * seg_x + seg_y * seg_y
+    if seg_length_sq <= 1e-24:
+        # A degenerate segment is a single point, which routing providers do emit
+        # as repeated vertices. Measure to that point rather than dividing by zero.
+        return math.hypot(point_x, point_y)
+
+    projection = (point_x * seg_x + point_y * seg_y) / seg_length_sq
+    projection = min(1.0, max(0.0, projection))
+    return math.hypot(point_x - projection * seg_x, point_y - projection * seg_y)
+
+
+def simplify_polyline(
+    coords: Sequence[tuple[float, float]], tolerance_miles: float
+) -> list[tuple[float, float]]:
+    """Douglas-Peucker simplification of a (lat, lon) polyline.
+
+    Drops every vertex that lies within tolerance_miles of the line kept in its
+    place, so the returned polyline is a subsequence of the input whose maximum
+    deviation from it is at most the tolerance. The first and last vertex are
+    always kept, and a tolerance of zero or less returns the input untouched.
+
+    The implementation is iterative rather than the textbook recursion on purpose.
+    A routing provider answers a coast to coast query with tens of thousands of
+    vertices, and the worst case recursion depth is the vertex count, which
+    overruns the interpreter's stack limit long before the input is unreasonable.
+    """
+    count = len(coords)
+    if tolerance_miles <= 0 or count < 3:
+        return list(coords)
+
+    # Hoisted out of the loop: the latitude axis has a fixed scale, so each point's
+    # y coordinate in miles is computed once rather than once per segment it is
+    # tested against.
+    lats = [lat for lat, _ in coords]
+    lons = [lon for _, lon in coords]
+    ys = [lat * MILES_PER_DEGREE_LATITUDE for lat in lats]
+
+    keep = [False] * count
+    keep[0] = True
+    keep[count - 1] = True
+
+    stack = [(0, count - 1)]
+    while stack:
+        first, last = stack.pop()
+        if last - first < 2:
+            continue
+
+        lon_scale = _miles_per_degree_longitude((lats[first] + lats[last]) / 2)
+        origin_x = lons[first] * lon_scale
+        origin_y = ys[first]
+        seg_x = lons[last] * lon_scale - origin_x
+        seg_y = ys[last] - origin_y
+        seg_length_sq = seg_x * seg_x + seg_y * seg_y
+        inverse_length_sq = 0.0 if seg_length_sq <= 1e-24 else 1.0 / seg_length_sq
+
+        # Squared distances throughout, seeded at the squared tolerance: a vertex
+        # has to beat it to be kept, the split index stays -1 when the whole run is
+        # within it, and the loop never pays for a square root it does not need.
+        worst_distance_sq = tolerance_miles * tolerance_miles
+        worst_index = -1
+        for index in range(first + 1, last):
+            point_x = lons[index] * lon_scale - origin_x
+            point_y = ys[index] - origin_y
+            if inverse_length_sq:
+                projection = (point_x * seg_x + point_y * seg_y) * inverse_length_sq
+                if projection < 0.0:
+                    projection = 0.0
+                elif projection > 1.0:
+                    projection = 1.0
+                offset_x = point_x - projection * seg_x
+                offset_y = point_y - projection * seg_y
+            else:
+                offset_x = point_x
+                offset_y = point_y
+            distance_sq = offset_x * offset_x + offset_y * offset_y
+            if distance_sq > worst_distance_sq:
+                worst_distance_sq = distance_sq
+                worst_index = index
+
+        if worst_index >= 0:
+            keep[worst_index] = True
+            stack.append((first, worst_index))
+            stack.append((worst_index, last))
+
+    return [coords[index] for index in range(count) if keep[index]]

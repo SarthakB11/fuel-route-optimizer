@@ -12,17 +12,64 @@ import pytest
 from fuelroute import places
 from fuelroute.places import AmbiguousLocation, UnknownLocation, resolve_location
 
+# Entries are [latitude, longitude, state, population]. SALEM deliberately keeps one
+# entry in the older three element shape, so the resolver is exercised against an index
+# file written before the population column existed.
 FIXTURE_INDEX = {
     "by_city": {
-        "SPRINGFIELD": [[39.78, -89.65, "IL"], [37.21, -93.29, "MO"]],
-        "LOS ANGELES": [[34.05223, -118.24368, "CA"]],
-        "MC CALLA": [[33.34872, -87.01416, "AL"]],
-        "HELENA": [[46.59271, -112.03611, "MT"]],
-        "ESPANOLA": [[35.99113, -106.08058, "NM"]],
+        "SPRINGFIELD": [
+            [39.78, -89.65, "IL", 114394],
+            [42.10148, -72.58981, "MA", 154341],
+            [37.21, -93.29, "MO", 170188],
+        ],
+        "DENVER": [
+            [39.73915, -104.9847, "CO", 729019],
+            [42.67137, -92.3374, "IA", 1835],
+            [35.53125, -81.0298, "NC", 2309],
+            [40.23315, -76.13717, "PA", 3875],
+        ],
+        "PORTLAND": [
+            [43.65737, -70.2589, "ME", 66881],
+            [45.52345, -122.67621, "OR", 652503],
+        ],
+        "AUSTIN": [[39.49296, -117.06588, "NV", 192], [30.26715, -97.74306, "TX", 964254]],
+        "SALEM": [[42.51954, -70.89673, "MA"], [44.9429, -123.0351, "OR", 177723]],
+        "FAIRVIEW": [[40.62285, -74.05236, "NJ"], [35.98785, -86.70858, "TN"]],
+        "WASHINGTON": [[38.89511, -77.03637, "DC", 689545], [37.13081, -113.50829, "UT", 24299]],
+        "CHARLESTON": [[32.77657, -79.93092, "SC", 150227], [38.34982, -81.63262, "WV", 46536]],
+        "SALT LAKE CITY": [[40.76078, -111.89105, "UT", 215548]],
+        "NEW YORK": [[40.71427, -74.00597, "NY", 8804190]],
+        "SAINT LOUIS": [[38.62727, -90.19789, "MO", 293310]],
+        "FORT WORTH": [[32.72541, -97.32085, "TX", 918915]],
+        "LOS ANGELES": [[34.05223, -118.24368, "CA", 3971883]],
+        "MC CALLA": [[33.34872, -87.01416, "AL", 0]],
+        "HELENA": [[46.59271, -112.03611, "MT", 32315]],
+        "ESPANOLA": [[35.99113, -106.08058, "NM", 10495]],
     },
     "by_city_state": {
         "SPRINGFIELD|IL": [39.78, -89.65],
+        "SPRINGFIELD|MA": [42.10148, -72.58981],
         "SPRINGFIELD|MO": [37.21, -93.29],
+        "DENVER|CO": [39.73915, -104.9847],
+        "DENVER|IA": [42.67137, -92.3374],
+        "DENVER|NC": [35.53125, -81.0298],
+        "DENVER|PA": [40.23315, -76.13717],
+        "PORTLAND|ME": [43.65737, -70.2589],
+        "PORTLAND|OR": [45.52345, -122.67621],
+        "AUSTIN|NV": [39.49296, -117.06588],
+        "AUSTIN|TX": [30.26715, -97.74306],
+        "SALEM|MA": [42.51954, -70.89673],
+        "SALEM|OR": [44.9429, -123.0351],
+        "FAIRVIEW|NJ": [40.62285, -74.05236],
+        "FAIRVIEW|TN": [35.98785, -86.70858],
+        "WASHINGTON|DC": [38.89511, -77.03637],
+        "WASHINGTON|UT": [37.13081, -113.50829],
+        "CHARLESTON|SC": [32.77657, -79.93092],
+        "CHARLESTON|WV": [38.34982, -81.63262],
+        "SALT LAKE CITY|UT": [40.76078, -111.89105],
+        "NEW YORK|NY": [40.71427, -74.00597],
+        "SAINT LOUIS|MO": [38.62727, -90.19789],
+        "FORT WORTH|TX": [32.72541, -97.32085],
         "LOS ANGELES|CA": [34.05223, -118.24368],
         "MC CALLA|AL": [33.34872, -87.01416],
         "HELENA|MT": [46.59271, -112.03611],
@@ -31,7 +78,24 @@ FIXTURE_INDEX = {
     "state_names": {
         "ILLINOIS": "IL",
         "MISSOURI": "MO",
+        "MASSACHUSETTS": "MA",
+        "COLORADO": "CO",
+        "IOWA": "IA",
+        "NORTH CAROLINA": "NC",
+        "PENNSYLVANIA": "PA",
+        "MAINE": "ME",
+        "OREGON": "OR",
+        "NEVADA": "NV",
+        "TEXAS": "TX",
+        "NEW JERSEY": "NJ",
+        "TENNESSEE": "TN",
         "CALIFORNIA": "CA",
+        "UTAH": "UT",
+        "NEW YORK": "NY",
+        "DISTRICT OF COLUMBIA": "DC",
+        "VIRGINIA": "VA",
+        "WEST VIRGINIA": "WV",
+        "SOUTH CAROLINA": "SC",
         "ALABAMA": "AL",
         "MONTANA": "MT",
         "NEW MEXICO": "NM",
@@ -72,6 +136,53 @@ def test_resolve_montana_abbreviation_is_not_expanded_to_mount() -> None:
     assert resolve_location("Helena, MT") == (46.59271, -112.03611)
 
 
+def test_resolve_city_and_state_without_a_comma() -> None:
+    # Nobody punctuates a search box, and "Denver CO" is not an unknown location.
+    assert resolve_location("Denver CO") == (39.73915, -104.9847)
+    assert resolve_location("Denver Colorado") == (39.73915, -104.9847)
+
+
+def test_resolve_multi_word_city_and_state_without_a_comma() -> None:
+    assert resolve_location("Salt Lake City Utah") == (40.76078, -111.89105)
+    assert resolve_location("New York New York") == (40.71427, -74.00597)
+
+
+def test_comma_free_split_prefers_the_reading_that_resolves() -> None:
+    # "Virginia" is a state, so the first split tried reads this as a city called
+    # "Charleston West" in Virginia. That city does not exist, so the two word state
+    # name has to get its turn and the answer is Charleston, West Virginia.
+    assert resolve_location("Charleston West Virginia") == (38.34982, -81.63262)
+
+
+def test_comma_free_input_that_names_no_real_city_is_unknown() -> None:
+    with pytest.raises(UnknownLocation, match="Nowhereville"):
+        resolve_location("Nowhereville Texas")
+
+
+def test_single_token_input_is_read_as_a_city_not_a_state() -> None:
+    # "Washington" is a city name here, not an empty city in Washington state, and it
+    # resolves to the District of Columbia on population, 689,545 against 24,299 in Utah.
+    assert resolve_location("Washington") == (38.89511, -77.03637)
+    assert resolve_location("New York") == (40.71427, -74.00597)
+
+
+def test_state_punctuation_is_ignored() -> None:
+    # "D.C." is how the district is written everywhere, and a trailing period after a
+    # state code is a typing habit, not a different place.
+    assert resolve_location("Washington, D.C.") == (38.89511, -77.03637)
+    assert resolve_location("Washington, D.C") == (38.89511, -77.03637)
+    assert resolve_location("Washington D.C.") == (38.89511, -77.03637)
+    assert resolve_location("Denver, CO.") == (39.73915, -104.9847)
+    assert resolve_location("Denver, Colorado.") == (39.73915, -104.9847)
+
+
+def test_abbreviated_city_names_with_periods_still_resolve() -> None:
+    # normalize_place_name expands FT and ST, and the period is punctuation it strips.
+    assert resolve_location("St. Louis, MO") == (38.62727, -90.19789)
+    assert resolve_location("Ft. Worth, TX") == (32.72541, -97.32085)
+    assert resolve_location("Ft. Worth Texas") == (32.72541, -97.32085)
+
+
 def test_resolve_unique_city_without_state() -> None:
     assert resolve_location("Los Angeles") == (34.05223, -118.24368)
 
@@ -79,6 +190,44 @@ def test_resolve_unique_city_without_state() -> None:
 def test_resolve_ambiguous_city_without_state_raises() -> None:
     with pytest.raises(AmbiguousLocation, match="Springfield"):
         resolve_location("Springfield")
+
+
+def test_ambiguous_error_names_every_candidate_state() -> None:
+    # The caller has to be told which states to choose between, or the 400 is a dead end.
+    with pytest.raises(AmbiguousLocation, match=r"IL, MA, MO"):
+        resolve_location("Springfield")
+
+
+def test_bare_name_resolves_to_the_population_dominant_city() -> None:
+    # Denver, Colorado is 188 times the size of the next largest Denver, so a bare
+    # "Denver" resolves there rather than returning a 400 nobody wants.
+    assert resolve_location("Denver") == (39.73915, -104.9847)
+
+
+def test_bare_name_resolves_when_one_namesake_is_tiny() -> None:
+    # Austin, Texas against Austin, Nevada: a large city and a hamlet.
+    assert resolve_location("Austin") == (30.26715, -97.74306)
+
+
+def test_bare_name_stays_ambiguous_when_the_ratio_is_just_under_the_threshold() -> None:
+    # Portland, Oregon has 652,503 people and Portland, Maine 66,881, a ratio of 9.8.
+    # That is under the 10x rule on purpose: a Maine caller typing "Portland" does not
+    # mean Oregon, so the resolver asks for a state instead of guessing.
+    with pytest.raises(AmbiguousLocation, match=r"ME, OR"):
+        resolve_location("Portland")
+
+
+def test_legacy_three_element_entry_still_loads() -> None:
+    # An index file built before the population column existed must not crash the
+    # resolver. A missing population reads as 0, so Salem, Oregon wins on its own count.
+    assert resolve_location("Salem") == (44.9429, -123.0351)
+
+
+def test_legacy_entries_alone_stay_ambiguous() -> None:
+    # Two entries with no population at all give the dominance rule nothing to work
+    # with, and the caller is asked for a state rather than handed an arbitrary city.
+    with pytest.raises(AmbiguousLocation, match=r"NJ, TN"):
+        resolve_location("Fairview")
 
 
 def test_resolve_ambiguous_city_disambiguated_by_state() -> None:

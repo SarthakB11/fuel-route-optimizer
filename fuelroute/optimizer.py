@@ -66,6 +66,12 @@ class RouteNotFeasible(ValueError):
     """Raised when no sequence of the candidate stations can cover the trip."""
 
 
+def _describe(candidate: RouteStation) -> str:
+    """Name a station the way a driver would read it: what, where, how far along."""
+    station = candidate.station
+    return f"{station.name} in {station.city}, {station.state} (mile {candidate.offset_miles:.0f})"
+
+
 def _check_feasibility(
     candidates: Sequence[RouteStation],
     total_distance_miles: float,
@@ -86,27 +92,35 @@ def _check_feasibility(
             "beyond the initial fuel range."
         )
 
+    # Every message below names the stations that bound the gap and where they
+    # sit along the route. A bare "996.7 miles apart" tells the caller the trip
+    # failed; naming Coachella, CA at mile 258 tells them why, and lets them see
+    # at a glance that the price file, not the service, is what ran out.
     origin_gap = candidates[0].offset_miles - initial_fuel_miles
     if origin_gap > TOLERANCE:
         raise RouteNotFeasible(
-            f"The first station is {origin_gap:.1f} miles beyond the "
-            f"{initial_fuel_miles:.1f} miles of initial fuel. An empty tank cannot "
-            "reach it."
+            f"The first station on the route, {_describe(candidates[0])}, is "
+            f"{origin_gap:.1f} miles beyond the {initial_fuel_miles:.1f} miles of "
+            "initial fuel. An empty tank cannot reach it."
         )
 
     for previous, current in zip(candidates, candidates[1:], strict=False):
         gap = current.offset_miles - previous.offset_miles
         if gap > range_miles + TOLERANCE:
             raise RouteNotFeasible(
-                f"Two consecutive candidate stations are {gap:.1f} miles apart, "
-                f"which exceeds the {range_miles:.1f} mile range."
+                f"The trip cannot be completed on a {range_miles:.0f} mile tank: after "
+                f"{_describe(previous)} the next station on the route is "
+                f"{_describe(current)}, {gap:.1f} miles further on. The price file has "
+                "no station in between within the corridor."
             )
 
     destination_gap = total_distance_miles - candidates[-1].offset_miles
     if destination_gap > range_miles + TOLERANCE:
         raise RouteNotFeasible(
-            f"The destination is {destination_gap:.1f} miles from the last "
-            f"station, which exceeds the {range_miles:.1f} mile range."
+            f"The trip cannot be completed on a {range_miles:.0f} mile tank: the last "
+            f"station on the route is {_describe(candidates[-1])}, and the destination "
+            f"is {destination_gap:.1f} miles beyond it with no station in between "
+            "within the corridor."
         )
 
 

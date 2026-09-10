@@ -21,7 +21,9 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
-          cache-dependency-path: requirements-dev.txt
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
 
       - name: Install dependencies
         run: |
@@ -34,8 +36,25 @@ jobs:
       - name: Format check
         run: ruff format --check .
 
+      - name: Type check
+        run: mypy fuelroute config
+
       - name: Django system checks
         run: python manage.py check --fail-level WARNING
 
+      # The floor is set below the measured total so an ordinary refactor does not
+      # fail the build, but a chunk of untested code cannot land unnoticed either.
       - name: Tests
-        run: pytest -q
+        run: pytest -q --cov --cov-report=term --cov-fail-under=95
+
+  docker:
+    # Only on a push to main. A pull request already gets the lint, type and test
+    # gates, and building the image on every push to a branch would add a couple of
+    # minutes for a file that changes rarely.
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -t fuel-route-optimizer .

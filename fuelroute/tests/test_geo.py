@@ -7,7 +7,14 @@ import random
 
 import pytest
 
-from fuelroute.geo import RoutePointIndex, cumulative_miles, haversine_miles, resample_polyline
+from fuelroute.geo import (
+    RoutePointIndex,
+    cumulative_miles,
+    haversine_miles,
+    perpendicular_offset_miles,
+    resample_polyline,
+    simplify_polyline,
+)
 
 # Expected values are the standard great circle distance between city centres,
 # checked against haversine_miles itself and cross referenced against commonly
@@ -149,3 +156,106 @@ def test_route_point_index_handles_route_that_doubles_back() -> None:
 def test_route_point_index_empty_points() -> None:
     index = RoutePointIndex([], [], cell_miles=10.0)
     assert index.nearest(35.0, -100.0, max_miles=10.0) is None
+
+
+def _zigzag(count: int) -> list[tuple[float, float]]:
+    """A route that wanders the way a real road does, without any randomness.
+
+    Two sine waves of different wavelengths, so the polyline has both long sweeps
+    that simplify away and tight corners that must survive.
+    """
+    points = []
+    for step in range(count):
+        fraction = step / (count - 1)
+        lon = -100.0 + fraction * 5.0
+        lat = 36.0 + 0.05 * math.sin(fraction * 40.0) + 0.01 * math.sin(fraction * 260.0)
+        points.append((lat, lon))
+    return points
+
+
+def test_simplify_polyline_collapses_a_straight_line_to_its_endpoints() -> None:
+    """A thousand points on one line carry no information the two ends do not."""
+    line = [(36.0, -100.0 + step * 0.005) for step in range(1000)]
+    simplified = simplify_polyline(line, tolerance_miles=0.02)
+    assert simplified == [line[0], line[-1]]
+
+
+def test_simplify_polyline_keeps_a_right_angle_corner() -> None:
+    """The corner is the whole shape: dropping it would move the line by miles."""
+    east = [(36.0, -100.0 + step * 0.05) for step in range(21)]
+    north = [(36.0 + step * 0.05, -99.0) for step in range(1, 21)]
+    corner = (36.0, -99.0)
+    simplified = simplify_polyline(east + north, tolerance_miles=0.02)
+    assert simplified == [east[0], corner, north[-1]]
+
+
+def test_simplify_polyline_always_keeps_the_endpoints() -> None:
+    coords = _zigzag(500)
+    for tolerance in (0.001, 0.02, 0.5, 50.0):
+        simplified = simplify_polyline(coords, tolerance_miles=tolerance)
+        assert simplified[0] == coords[0]
+        assert simplified[-1] == coords[-1]
+        assert len(simplified) >= 2
+
+
+def test_simplify_polyline_with_zero_tolerance_returns_the_input_unchanged() -> None:
+    """Zero tolerance means "change nothing", not "drop everything exactly on the line"."""
+    coords = _zigzag(200)
+    assert simplify_polyline(coords, tolerance_miles=0.0) == coords
+    assert simplify_polyline(coords, tolerance_miles=-1.0) == coords
+
+
+def test_simplify_polyline_short_inputs_are_returned_as_they_are() -> None:
+    assert simplify_polyline([], tolerance_miles=0.02) == []
+    assert simplify_polyline([(36.0, -100.0)], tolerance_miles=0.02) == [(36.0, -100.0)]
+    pair = [(36.0, -100.0), (36.0, -99.0)]
+    assert simplify_polyline(pair, tolerance_miles=0.02) == pair
+
+
+def test_simplify_polyline_handles_repeated_vertices() -> None:
+    """Routing providers do emit the same coordinate twice, which is a zero length
+    segment and a division by zero for the naive distance formula.
+    """
+    coords = [(36.0, -100.0), (36.0, -100.0), (36.5, -99.0), (36.5, -99.0), (37.0, -98.0)]
+    simplified = simplify_polyline(coords, tolerance_miles=0.02)
+    assert simplified[0] == coords[0]
+    assert simplified[-1] == coords[-1]
+    assert len(simplified) <= len(coords)
+
+
+def test_simplify_polyline_every_dropped_point_stays_within_tolerance() -> None:
+    """The guarantee the tolerance is supposed to buy, checked point by point.
+
+    The simplified polyline is a subsequence of the input, so walking both lists
+    forward pairs each dropped run with the segment that replaced it. Every dropped
+    point must lie within the tolerance of that segment.
+    """
+    coords = _zigzag(2000)
+    tolerance = 0.02
+    simplified = simplify_polyline(coords, tolerance_miles=tolerance)
+    assert 2 < len(simplified) < len(coords)
+
+    kept_indexes = []
+    cursor = 0
+    for point in simplified:
+        while coords[cursor] != point:
+            cursor += 1
+        kept_indexes.append(cursor)
+
+    worst = 0.0
+    for start, end in zip(kept_indexes, kept_indexes[1:], strict=False):
+        for index in range(start + 1, end):
+            offset = perpendicular_offset_miles(coords[index], coords[start], coords[end])
+            worst = max(worst, offset)
+    assert worst <= tolerance + 1e-9
+
+
+def test_perpendicular_offset_miles_matches_a_known_distance() -> None:
+    """One degree of latitude off a line of constant latitude is 69 miles."""
+    offset = perpendicular_offset_miles((37.0, -99.0), (36.0, -100.0), (36.0, -98.0))
+    assert offset == pytest.approx(69.0, rel=1e-6)
+
+
+def test_perpendicular_offset_miles_measures_to_a_degenerate_segment() -> None:
+    offset = perpendicular_offset_miles((37.0, -100.0), (36.0, -100.0), (36.0, -100.0))
+    assert offset == pytest.approx(69.0, rel=1e-6)

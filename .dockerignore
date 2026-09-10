@@ -1,0 +1,26 @@
+# Docker matches these patterns against the whole path, not against each directory
+# the way git does, so anything that can appear in a subdirectory needs the leading
+# "**/" or it is only excluded at the top of the build context.
+.git
+.github
+.venv
+venv
+**/__pycache__
+**/*.py[cod]
+**/*.egg-info
+**/.pytest_cache
+**/.ruff_cache
+**/.mypy_cache
+.coverage
+htmlcov
+build/
+*.zip
+US.txt
+db.sqlite3
+.env
+docs
+postman
+scripts
+# The source price list is only read by the offline dataset build, which does not
+# run in the container. The generated indexes it produces are what ships.
+data/*.csv

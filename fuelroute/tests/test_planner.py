@@ -406,3 +406,58 @@ def test_unknown_location_raises_before_any_routing_call(configure_dataset, monk
             initial_fuel_miles=0.0,
         )
     assert fake.call_count == 0
+
+
+def test_concurrent_identical_cold_requests_share_one_routing_call(
+    configure_dataset, monkeypatch
+) -> None:
+    """Six identical requests arriving together make one routing call, not six.
+
+    Without single flight every one of them misses the cache and every one calls the
+    provider, because none has stored a result yet. The fake below holds the first
+    caller inside the routing call long enough for the others to pile up behind the
+    per key lock, which is exactly the race this guards against.
+    """
+    import threading
+
+    configure_dataset(ROWS_WITHIN_RADIUS)
+    fake = _FakeFetchRoute()
+    started = threading.Event()
+
+    def slow_fetch(origin, destination, *, session=None):
+        started.set()
+        threading.Event().wait(0.15)
+        return fake(origin, destination, session=session)
+
+    monkeypatch.setattr(routing, "fetch_route", slow_fetch)
+
+    results: list[str] = []
+    errors: list[BaseException] = []
+
+    def worker() -> None:
+        try:
+            plan = build_plan(
+                "Origin City, OK",
+                "Finish City, AR",
+                range_miles=500.0,
+                mpg=10.0,
+                corridor_miles=15.0,
+                initial_fuel_miles=0.0,
+            )
+            results.append(plan.cache)
+        except BaseException as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    threads = [threading.Thread(target=worker) for _ in range(6)]
+    threads[0].start()
+    assert started.wait(2.0), "first request never reached the routing call"
+    for thread in threads[1:]:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=5.0)
+
+    assert not errors, errors
+    assert len(results) == 6
+    assert fake.call_count == 1
+    assert results.count("miss") == 1
+    assert results.count("hit") == 5

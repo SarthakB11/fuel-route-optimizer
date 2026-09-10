@@ -18,19 +18,55 @@ GET /api/v1/route-plan?start=Seattle,%20WA&finish=Miami,%20FL
 
 ```jsonc
 {
+  "map_url":   "http://127.0.0.1:8000/map?start=Seattle%2C+WA&finish=Miami%2C+FL",
   "fuel_plan": { "stop_count": 20, "total_gallons": 330.15, "total_cost_usd": 1026.29, "stops": [ ... ] },
-  "route":     { "provider": "OSRM", "distance_miles": 3301.5, "geometry": { "type": "LineString", ... } },
+  "route":     { "provider": "OSRM", "distance_miles": 3301.5, "geometry_vertices": 3396, "source_vertices": 35438, "geometry": { "type": "LineString", ... } },
   "performance": { "total_ms": 1857.46, "routing_ms": 1613.12, "compute_ms": 53.31, "external_api_calls": 1 }
 }
 ```
 
 There is also a browser map at `/map?start=Seattle,%20WA&finish=Miami,%20FL` that draws
-the route and the stops.
+the route and the stops:
+
+![Seattle to Miami: the route, twenty numbered fuel stops, and the totals](docs/map-seattle-miami.jpeg)
+
+The green pin is the departure fill up. Every other pin is numbered in the order the
+stops are made, and clicking one shows the station, the price, the gallons bought
+and the cost.
 
 ## What makes this interesting
 
 The exercise has two hard constraints, and everything in the design follows from them:
-call the routing service **once** per request, and be **fast**.
+call the routing service **once** per request, and be **fast**. This is what one
+request does, and where the one external call sits:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as Client
+    participant A as Django API
+    participant P as Place index (in memory)
+    participant K as Plan cache (in memory)
+    participant O as OSRM (the one external call)
+    participant S as Station index (in memory)
+
+    C->>A: GET /api/v1/route-plan?start=Seattle, WA&finish=Miami, FL
+    A->>P: resolve both names to coordinates
+    P-->>A: (47.606, -122.332), (25.774, -80.194)
+    A->>K: look up plan by resolved inputs
+    alt cache hit
+        K-->>A: stored plan
+        A-->>C: 200, external_api_calls 0, about 4 ms
+    else cache miss
+        A->>O: one GET, full route geometry
+        O-->>A: 3,301 miles, 35,438 vertices
+        A->>S: resample to 1 mile, match stations within the corridor
+        S-->>A: 398 matches, 183 distinct positions
+        A->>A: choose the departure pump, run the greedy
+        A->>K: store the plan
+        A-->>C: 200, external_api_calls 1, about 1.5 s
+    end
+```
 
 - **One external call per request.** The route geometry comes from a single OSRM
   request. Place names are resolved against a local index rather than a geocoding
@@ -72,7 +108,22 @@ curl "http://127.0.0.1:8000/api/v1/route-plan?start=Denver,+CO&finish=Chicago,+I
 ```
 
 No database to create, no migrations to run, no API key to obtain. The station dataset
-is committed, so a clean checkout works immediately.
+is committed, so a clean checkout works immediately. That claim was checked rather than
+assumed: the steps above were run verbatim from a fresh clone on Linux with Python 3.12
+and on Windows with Python 3.13, and the Postman collection was run against the result
+with newman, nine requests and eight assertions, all passing.
+
+### Or with Docker
+
+```bash
+docker compose up --build
+curl "http://127.0.0.1:8000/api/v1/route-plan?start=Denver,+CO&finish=Chicago,+IL"
+```
+
+One service, no database container, no volume. The image runs gunicorn with two
+workers as a non root user on `python:3.12-slim`, and it needs no environment
+variables at all: the defaults are the same ones `runserver` uses. CI builds the image
+on every push so a broken Dockerfile cannot land.
 
 Configuration is optional and lives in environment variables. `.env.example` lists
 every variable with its default; export the ones you want to change, or load the file
@@ -85,24 +136,54 @@ there is no hidden configuration step.
 
 | Parameter            | Default  | Meaning                                                                                                                                                                                       |
 | -------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `start`              | required | Origin. `"Denver, CO"`, `"Denver, Colorado"` or `"39.7392,-104.9903"`. A bare city name works only when it is unique nationally; `"Denver"` matches four states and returns a 400 naming them |
+| `start`              | required | Origin. `"Denver, CO"`, `"Denver, Colorado"`, `"Denver Colorado"` or `"39.7392,-104.9903"`. A bare `"Denver"` also works when one namesake dominates by population; `"Springfield"` does not, and the 400 names the states to choose from |
 | `finish`             | required | Destination, same formats                                                                                                                                                                     |
 | `range_miles`        | 500      | How far the vehicle goes on a full tank                                                                                                                                                       |
 | `mpg`                | 10       | Miles per gallon                                                                                                                                                                              |
 | `corridor_miles`     | 12       | How far off the route a station may sit to count                                                                                                                                              |
 | `initial_fuel_miles` | 0        | Miles of fuel already in the tank at the origin                                                                                                                                               |
+| `geometry`           | `simplified` | `simplified` thins the returned route line, `full` returns every vertex the routing provider sent |
 
-The response has five blocks: `request` with the resolved inputs, `fuel_plan` with the
-ordered stops and the totals, `route` with the provider, distance, duration and GeoJSON
-geometry, `assumptions` in plain English, and `performance` with the timings and the
-external call count.
+The response has six blocks: `request` with the resolved inputs, `map_url` linking to
+the browser map for the same trip, `fuel_plan` with the ordered stops and the totals,
+`route` with the provider, distance, duration and GeoJSON geometry, `assumptions` in
+plain English, and `performance` with the timings and the external call count.
 
-`fuel_plan` deliberately comes before `route`. The geometry runs to tens of thousands
-of coordinates, and putting it first would bury the answer for anyone reading the raw
-body in a browser.
+`fuel_plan` deliberately comes before `route`. The geometry runs to thousands of
+coordinates, and putting it first would bury the answer for anyone reading the raw body
+in a browser.
 
-Each stop reports the station, its coordinates, how far along the route it is, how far
-off the route it sits, the price, the gallons to buy, the cost, and the running total.
+`geometry` decides how much of the route line comes back. OSRM answers Seattle to Miami
+with 35,438 vertices, one every 500 feet, which is 831 KB of JSON to draw a line no
+screen resolves to that detail. The default runs Douglas-Peucker over it at a tolerance
+of 0.02 miles, about 30 metres, which leaves 3,396 vertices in an 88 KB body: no vertex
+OSRM sent lies further than that tolerance from the line returned, which is invisible at
+any zoom the map page offers. `route.geometry_vertices` and `route.source_vertices`
+report both counts on every response, so the thinning is never silent, and
+`assumptions.simplification` states the tolerance.
+
+The plan does not depend on that choice. Station matching runs on the full polyline
+resampled to one point per mile, before anything is dropped, so `geometry=simplified`
+and `geometry=full` return the same stops at the same offsets for the same price. A
+test asserts exactly that. Pass `geometry=full` when you want the provider's own
+vertices.
+
+`map_url` is an absolute link to `/map` carrying the query parameters the caller sent,
+so "return a map of the route" is answered by a URL in the body rather than by a page
+the caller has to assemble from the parameters they just typed.
+
+`request.start.snapped_to_road_miles` and `request.finish.snapped_to_road_miles` report
+how far the routing provider had to move each point to put it on a road. A pair of
+coordinates in the Pacific is answered with a perfectly good route from the nearest
+coast road, and this is the only thing in the response that says so: 142.7 miles, in
+that case. Above five miles the response also carries an `assumptions.snapped_endpoint`
+line naming the endpoint and the distance, because past that the plan answers a
+different question than the one that was asked.
+
+Each stop reports the station, its coordinates, how far along the route it is
+(`offset_miles`) and how far the vehicle drives to reach it from the previous stop
+(`leg_miles`), how far off the route it sits, the price, the gallons to buy, the cost,
+and the running total.
 
 Errors return `{"error": ..., "detail": ...}`:
 
@@ -111,6 +192,11 @@ Errors return `{"error": ..., "detail": ...}`:
 | 400    | A bad parameter, or a place that cannot be resolved or is ambiguous                                                             |
 | 422    | The trip cannot be driven: no road route between the points, no station within the corridor, or a gap wider than the tank range |
 | 502    | The routing provider itself failed                                                                                              |
+
+A 422 for an empty corridor says which kind of empty it is. If widening
+`corridor_miles` would find stations, the message says how many lie within the 50 mile
+maximum. If nothing lies within 50 miles of any point on the route, as on San Francisco
+to Sacramento, it says so plainly rather than offering advice that cannot work.
 
 The distinction between 422 and 502 is deliberate. Asking for Los Angeles to Honolulu
 is not a provider outage, it is a trip that cannot be driven, and the caller should not
@@ -183,12 +269,13 @@ Measured on Seattle to Miami, 3,301 miles, 35,438 geometry vertices from OSRM, 3
 stations matched inside the corridor which collapse to 183 distinct positions, 20 fuel
 stops:
 
-| Stage                                                         | Time                               |
-| ------------------------------------------------------------- | ---------------------------------- |
-| OSRM routing call                                             | 1,200 to 1,600 ms                  |
-| All local work: resample, match stations, optimise, serialise | 53 ms                              |
-| **Total, cold**                                               | **1,300 to 1,900 ms**              |
-| **Total, cached repeat**                                      | **4 to 5 ms, zero external calls** |
+| Stage | Time |
+|---|---|
+| OSRM routing call | 1,200 to 1,600 ms |
+| Local work with `geometry=full`: resample, match stations, optimise, serialise | 73 ms |
+| Local work by default, which adds thinning 35,438 vertices to 3,396 | 174 ms |
+| **Total, cold** | **1,300 to 1,900 ms** |
+| **Total, cached repeat** | **4 to 10 ms, zero external calls** |
 
 Los Angeles to New York, 2,793 miles, has the same shape: about 52 ms of local work on
 top of whatever the routing call costs.
@@ -200,10 +287,23 @@ them as indicative rather than as a benchmark. That variance is itself the argum
 making the call once and caching the result.
 
 The number that is stable, and the one this project can fairly be judged on, is the
-local work: about 53 ms to resample a 35,000 vertex polyline, match 6,626 stations
-against it, choose 20 fuel stops and serialise the response. It stays near 50 ms
-whether the route is 600 miles or 3,300, and a cached repeat answers in about 4 ms
+local work. Resampling a 35,000 vertex polyline, matching 6,626 stations against it,
+choosing 20 fuel stops and serialising the response is about 73 ms, and it stays in
+that region whether the route is 600 miles or 3,300.
+
+Thinning the geometry is the one piece of local work that is not close to free.
+Douglas-Peucker over OSRM's 35,438 vertices costs about 100 ms, so Seattle to Miami
+does 174 ms of local work by default against 73 ms with `geometry=full`. What it buys
+is a body 9.4 times smaller, 88 KB against 831 KB, or 32 KB against 258 KB once
+gzipped: three quarters of a megabyte the browser does not have to receive, parse and
+hand to Leaflet. The routing call is still several times either figure, so the trade
+is 100 ms of server CPU against the wire, and a caller who would rather have the CPU
+back can ask for `geometry=full`. A cached repeat answers in under 10 ms either way,
 having made no external call at all.
+
+Six identical requests arriving at once make one routing call, not six. A miss takes a
+per key lock before it calls the provider, so concurrent callers for the same trip
+wait for the first and then read its result from the cache.
 
 Station matching avoids the obvious quadratic trap. Comparing every station to every
 one of OSRM's 34,000 geometry vertices would be 225 million distance calculations. The
@@ -248,9 +348,39 @@ and its coverage is uneven in ways worth knowing before reading a 422:
 - Coverage is dense across the interstate corridors of the Midwest, the South and
   Texas, which is where a truck stop pricing feed would be expected to concentrate.
 
-These are properties of the data, not of the service. A 422 saying the destination is
-997 miles from the last station is the correct answer to a route the file cannot
-support, and it names the gap so the cause is obvious.
+To make that concrete, here is the widest gap between consecutive stations on the
+major corridors, measured by routing each one and matching the file against it at the
+default 12 mile corridor. Anything under 500 miles completes on the default tank.
+
+| Corridor                         | Miles | Widest gap  | Result                                  |
+| -------------------------------- | ----- | ----------- | --------------------------------------- |
+| I-90 Seattle to Boston           | 3,040 | 216         | completes                               |
+| I-94 Billings to Detroit         | 1,512 | 217         | completes                               |
+| I-80 Salt Lake City to Chicago   | 1,401 | 92          | completes                               |
+| I-70 Denver to Baltimore         | 1,681 | 55          | completes                               |
+| I-95 Boston to Miami             | 1,491 | 46          | completes                               |
+| I-35 Duluth to Laredo            | 1,558 | 53          | completes                               |
+| I-10 Los Angeles to Jacksonville | 2,417 | 148         | completes, departs via Nevada           |
+| I-40 Los Angeles to Nashville    | 2,007 | 96          | completes, departs via Nevada           |
+| I-80 San Francisco to New York   | 2,911 | 94          | completes, departs via Nevada           |
+| US-50 Reno to Salt Lake City     | 519   | 95          | completes                               |
+| I-5 Seattle to Portland          | 173   | 37          | completes                               |
+| I-5 Seattle to San Diego         | 1,255 | 997         | cannot: no station on I-5 in California |
+| I-5 Sacramento to Los Angeles    | 384   | no stations | cannot: nothing within 12 miles         |
+| Las Vegas to San Francisco       | 568   | 537         | cannot: no station past the Nevada line |
+
+Every failure is a California gap in the source file. Everywhere else, the widest gap
+on any interstate is 217 miles, well inside the tank.
+
+At the other extreme, a trip shorter than the corridor is wide is still a trip. Every
+station near a route that short projects onto its final point, and the offsets are
+measured along the resampled polyline, whose length sits a few hundred thousandths of a
+mile either side of the road distance the provider reports. Half a mile across
+downtown Denver plans one fill up of 0.049 gallons for sixteen cents.
+
+These are properties of the data, not of the service. When a trip cannot be
+completed, the 422 names the last station reached, the next one on the route, and the
+distance between them, so the cause is obvious from the message alone.
 
 To rebuild from scratch, which downloads the GeoNames US gazetteer:
 
@@ -266,7 +396,9 @@ pytest
 ```
 
 Every test runs offline and deterministically. The routing provider is mocked at the
-session boundary, and no test touches the network.
+session boundary, and no test touches the network. Coverage is 97 percent and CI fails
+below 95; `mypy` runs over the whole package in CI and is clean, and it earned its
+place by catching two real call site mismatches while the code was being written.
 
 The suite covers the geometry helpers against known distances, the grid index against a
 brute force scan, the routing client's parsing and its failure modes, place resolution,
@@ -274,7 +406,10 @@ the dataset's integrity, and the API's status codes and response shape. Two of t
 carry most of the weight:
 
 - **the greedy against an exact dynamic program** on randomised instances, which is the
-  real proof that the optimiser is correct rather than merely plausible
+  real proof that the optimiser is correct rather than merely plausible. The same check
+  was also run outside the suite on 25 real routes between large US cities, with the
+  actual OSRM geometry, the actual station matches and the actual prices: the greedy
+  matched the exact optimum to the cent on every one
 - **an assertion that the routing mock is called exactly once** on a cold request and
   exactly zero times on a repeat, which pins the constraint the whole design exists to
   satisfy

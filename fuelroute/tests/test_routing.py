@@ -140,3 +140,52 @@ def test_no_route_codes_raise_route_unavailable(code: str) -> None:
 def test_route_unavailable_is_a_routing_error() -> None:
     """Callers that only care that routing did not work still catch one type."""
     assert issubclass(RouteUnavailable, RoutingError)
+
+
+def _payload_with_waypoints(origin_meters: float, destination_meters: float) -> dict:
+    payload = _ok_payload()
+    payload["waypoints"] = [
+        {"name": "Ocean", "distance": origin_meters},
+        {"name": "Main Street", "distance": destination_meters},
+    ]
+    return payload
+
+
+def test_fetch_route_reports_how_far_each_point_was_snapped() -> None:
+    """OSRM's waypoint distance is the only sign the route does not start where asked."""
+    session = FakeSession(response=FakeResponse(payload=_payload_with_waypoints(80467.2, 15.0)))
+    route = fetch_route((35.0, -100.0), (36.2, -98.5), session=session)
+
+    assert route.origin_snap_miles == pytest.approx(50.0, rel=1e-4)
+    assert route.destination_snap_miles == pytest.approx(15.0 * 0.000621371192)
+
+
+def test_fetch_route_reports_zero_snap_when_the_response_has_no_waypoints() -> None:
+    """The field is informational, so an answer without it is still a good route."""
+    session = FakeSession(response=FakeResponse(payload=_ok_payload()))
+    route = fetch_route((35.0, -100.0), (36.2, -98.5), session=session)
+
+    assert route.origin_snap_miles == 0.0
+    assert route.destination_snap_miles == 0.0
+
+
+@pytest.mark.parametrize(
+    "waypoints",
+    [
+        [],
+        [{"distance": 100.0}],
+        "not a list",
+        [{"distance": "not a number"}, {"distance": None}],
+        [None, 7],
+    ],
+)
+def test_fetch_route_tolerates_malformed_waypoints(waypoints: Any) -> None:
+    """A route in the body is worth returning even when the extras are unreadable."""
+    payload = _ok_payload()
+    payload["waypoints"] = waypoints
+    session = FakeSession(response=FakeResponse(payload=payload))
+    route = fetch_route((35.0, -100.0), (36.2, -98.5), session=session)
+
+    assert route.origin_snap_miles == 0.0
+    assert route.destination_snap_miles == 0.0
+    assert route.distance_miles > 0

@@ -8,6 +8,7 @@ import functools
 import os
 import time
 from dataclasses import dataclass
+from typing import Any
 
 import requests
 
@@ -44,6 +45,37 @@ class Route:
     provider: str
     api_calls: int
     elapsed_ms: float
+    # How far each requested point had to move to reach a road. Default zero so a
+    # provider response without waypoints, or a caller building a Route by hand,
+    # still produces a usable object.
+    origin_snap_miles: float = 0.0
+    destination_snap_miles: float = 0.0
+
+
+def _waypoint_snap_miles(waypoint: Any) -> float:
+    """The snap distance of one waypoint, in miles, or zero if it is not readable."""
+    if not isinstance(waypoint, dict):
+        return 0.0
+    try:
+        return float(waypoint["distance"]) * METERS_TO_MILES
+    except (KeyError, TypeError, ValueError):
+        return 0.0
+
+
+def _snap_distances(payload: dict[str, Any]) -> tuple[float, float]:
+    """How far OSRM moved each requested point to put it on a road.
+
+    OSRM reports this per waypoint and it is the only thing in the response that
+    says the route does not begin where the caller asked. A pair of coordinates in
+    the Pacific is answered with a perfectly good route from the nearest coast road,
+    and without this the caller has no way to notice. The field is informational, so
+    a missing or malformed waypoint list reports zero rather than failing a request
+    that otherwise has a route in it.
+    """
+    waypoints = payload.get("waypoints")
+    if not isinstance(waypoints, list) or len(waypoints) < 2:
+        return 0.0, 0.0
+    return _waypoint_snap_miles(waypoints[0]), _waypoint_snap_miles(waypoints[-1])
 
 
 @functools.lru_cache(maxsize=1)
@@ -133,6 +165,8 @@ def fetch_route(
     except (KeyError, TypeError, ValueError, AttributeError) as exc:
         raise RoutingError(f"OSRM response body was malformed: {exc}") from exc
 
+    origin_snap_miles, destination_snap_miles = _snap_distances(payload)
+
     return Route(
         coordinates=coordinates,
         distance_miles=distance_miles,
@@ -140,4 +174,6 @@ def fetch_route(
         provider="OSRM",
         api_calls=1,
         elapsed_ms=elapsed_ms,
+        origin_snap_miles=origin_snap_miles,
+        destination_snap_miles=destination_snap_miles,
     )

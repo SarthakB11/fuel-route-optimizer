@@ -1,35 +1,63 @@
 """Query validation and response shaping for the route planning API.
 
 All rounding for the HTTP response happens here: money to 2 decimal places,
-prices per gallon to 3, miles to 1, coordinates to 6. The planner and optimizer
+prices per gallon and gallons to 3, miles to 1, coordinates to 6. The planner and optimizer
 keep full floating point precision throughout the calculation, this module is
 the only place a value gets truncated for display.
 """
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 
 from django.conf import settings
 from rest_framework import serializers
 
-from fuelroute.planner import ORIGIN_SOURCE_NEAREST, PlanResult
+from fuelroute.planner import (
+    GEOMETRY_CHOICES,
+    GEOMETRY_FULL,
+    GEOMETRY_SIMPLIFIED,
+    ORIGIN_SOURCE_NEAREST,
+    ORIGIN_SOURCE_NONE,
+    SIMPLIFY_TOLERANCE_MILES,
+    PlanResult,
+)
 
 MONEY_DP = 2
 PRICE_DP = 3
+# Gallons get a third decimal place because a caller checking the plan back against
+# the distance multiplies them by mpg. At mpg=1000 a hundredth of a gallon is four
+# miles, which is enough to look like an error in the arithmetic.
+GALLONS_DP = 3
 MILES_DP = 1
 COORD_DP = 6
+
+# Past this, the point the caller asked for and the point the route starts from are
+# different places and the response should say so out loud.
+SNAP_NOTE_MILES = 5.0
+
+# Long enough for any real place name with a state and a country on the end, short
+# enough that a pasted document cannot be echoed back inside an error message.
+MAX_LOCATION_LENGTH = 200
 
 
 class RoutePlanQuerySerializer(serializers.Serializer):
     """Validates the query parameters for GET /api/v1/route-plan."""
 
-    start = serializers.CharField(allow_blank=False, trim_whitespace=True)
-    finish = serializers.CharField(allow_blank=False, trim_whitespace=True)
+    start = serializers.CharField(
+        allow_blank=False, trim_whitespace=True, max_length=MAX_LOCATION_LENGTH
+    )
+    finish = serializers.CharField(
+        allow_blank=False, trim_whitespace=True, max_length=MAX_LOCATION_LENGTH
+    )
     range_miles = serializers.FloatField(required=False, default=settings.DEFAULT_RANGE_MILES)
     mpg = serializers.FloatField(required=False, default=settings.DEFAULT_MPG)
     corridor_miles = serializers.FloatField(required=False, default=settings.DEFAULT_CORRIDOR_MILES)
     initial_fuel_miles = serializers.FloatField(required=False, default=0.0)
+    geometry = serializers.ChoiceField(
+        choices=GEOMETRY_CHOICES, required=False, default=GEOMETRY_SIMPLIFIED
+    )
 
     def validate_range_miles(self, value: float) -> float:
         if value <= 0:
@@ -77,7 +105,7 @@ class RoutePlanQuerySerializer(serializers.Serializer):
         return attrs
 
 
-def _stop_payload(stop: Any) -> dict[str, Any]:
+def _stop_payload(stop: Any, leg_miles: float) -> dict[str, Any]:
     """Round and flatten one FuelStop for the response, tagging it by kind.
 
     The kind is keyed on the offset, not on the position in the list. When the caller
@@ -96,14 +124,76 @@ def _stop_payload(stop: Any) -> dict[str, Any]:
         "latitude": round(station.latitude, COORD_DP),
         "longitude": round(station.longitude, COORD_DP),
         "offset_miles": round(stop.offset_miles, MILES_DP),
+        "leg_miles": round(leg_miles, MILES_DP),
         "detour_miles": round(stop.detour_miles, MILES_DP),
         "price_per_gallon": round(stop.price_per_gallon, PRICE_DP),
-        "gallons": round(stop.gallons, MONEY_DP),
+        "gallons": round(stop.gallons, GALLONS_DP),
         "cost_usd": round(stop.cost, MONEY_DP),
         "cumulative_cost_usd": round(stop.cumulative_cost, MONEY_DP),
         "tank_miles_on_arrival": round(stop.tank_miles_on_arrival, MILES_DP),
         "tank_miles_on_departure": round(stop.tank_miles_on_departure, MILES_DP),
     }
+
+
+def _stop_payloads(stops: Sequence[Any]) -> list[dict[str, Any]]:
+    """Render the stops in order, giving each one the distance driven to reach it.
+
+    offset_miles answers "where on the route is this?", which is what a map needs.
+    leg_miles answers "how far do I drive before the next fill up?", which is what a
+    driver reading the plan on the road needs, and deriving it from two offsets is
+    exactly the arithmetic the response should not make its caller do. Both are taken
+    from full precision offsets and rounded once, so neither inherits the other's
+    rounding error.
+    """
+    payloads: list[dict[str, Any]] = []
+    previous_offset = 0.0
+    for stop in stops:
+        payloads.append(_stop_payload(stop, stop.offset_miles - previous_offset))
+        previous_offset = stop.offset_miles
+    return payloads
+
+
+def _simplification_note(result: PlanResult) -> str:
+    """Say what was done to the geometry, in both modes, so the counts make sense."""
+    if result.geometry == GEOMETRY_FULL:
+        return (
+            "geometry=full was requested, so the route geometry is exactly what the "
+            "routing provider returned and geometry_vertices equals source_vertices. "
+            f"The default simplifies it to a tolerance of {SIMPLIFY_TOLERANCE_MILES:g} "
+            "miles."
+        )
+    return (
+        "The route geometry is simplified with Douglas-Peucker to a tolerance of "
+        f"{SIMPLIFY_TOLERANCE_MILES:g} miles, about 30 metres: no vertex the routing "
+        "provider sent lies further than that from the line returned here, which is "
+        "invisible at any zoom the map page offers. Station matching ran on the full "
+        "polyline, so nothing in the plan depends on this. Pass geometry=full for "
+        "every vertex the provider sent."
+    )
+
+
+def _snapped_endpoint_note(result: PlanResult) -> str | None:
+    """Say which endpoint the routing provider moved, when it moved one far enough.
+
+    Coordinates in the middle of a lake or a field are answered with a real route
+    from the nearest road, and every mile and every dollar below is for that route,
+    not for the point the caller typed. Below the threshold this is the ordinary
+    business of putting a city centroid on the nearest street and saying so would be
+    noise; above it, the answer is to a different question than the one asked.
+    """
+    moved = []
+    if result.route.origin_snap_miles > SNAP_NOTE_MILES:
+        moved.append(f"the start by {result.route.origin_snap_miles:.1f} miles")
+    if result.route.destination_snap_miles > SNAP_NOTE_MILES:
+        moved.append(f"the finish by {result.route.destination_snap_miles:.1f} miles")
+    if not moved:
+        return None
+    return (
+        "The routing provider moved the requested points onto the road network, "
+        + " and ".join(moved)
+        + ". Every distance and price below is for the snapped route, not for the "
+        "coordinates as they were given."
+    )
 
 
 def _origin_leg_note(result: PlanResult) -> str:
@@ -115,6 +205,8 @@ def _origin_leg_note(result: PlanResult) -> str:
     drawn at a place the driver has not reached yet. Saying where it actually is beats
     letting a reader discover the discrepancy in the coordinates.
     """
+    if result.origin_price_source == ORIGIN_SOURCE_NONE:
+        return "The trip covers no distance, so no fuel is bought and no station is priced."
     if result.origin_price_source == ORIGIN_SOURCE_NEAREST:
         return (
             "No station in the price file lies within the origin search radius. The "
@@ -131,51 +223,29 @@ def _origin_leg_note(result: PlanResult) -> str:
     )
 
 
-def build_response_payload(result: PlanResult, total_ms: float) -> dict[str, Any]:
+def build_response_payload(result: PlanResult, total_ms: float, *, map_url: str) -> dict[str, Any]:
     """Assemble the full JSON body for a successful route plan response."""
     fuel_plan = result.fuel_plan
-    stops = [_stop_payload(stop) for stop in fuel_plan.stops]
+    stops = _stop_payloads(fuel_plan.stops)
     average_price = (
         fuel_plan.total_cost / fuel_plan.total_gallons if fuel_plan.total_gallons > 0 else 0.0
     )
     geometry_coordinates = [
-        [round(lon, COORD_DP), round(lat, COORD_DP)] for lat, lon in result.route.coordinates
+        [round(lon, COORD_DP), round(lat, COORD_DP)] for lat, lon in result.geometry_coordinates
     ]
 
-    # Key order matters here for a human reading the raw body in a browser. The route
-    # geometry is tens of thousands of coordinates and would otherwise bury the answer,
-    # so the plan and the totals come first and the geometry sits near the end.
-    return {
-        "request": {
-            "start": {
-                "query": result.start.query,
-                "latitude": round(result.start.latitude, COORD_DP),
-                "longitude": round(result.start.longitude, COORD_DP),
-            },
-            "finish": {
-                "query": result.finish.query,
-                "latitude": round(result.finish.latitude, COORD_DP),
-                "longitude": round(result.finish.longitude, COORD_DP),
-            },
-            "range_miles": round(result.range_miles, MILES_DP),
-            "mpg": round(result.mpg, MILES_DP),
-            "corridor_miles": round(result.corridor_miles, MILES_DP),
-            "initial_fuel_miles": round(result.initial_fuel_miles, MILES_DP),
-        },
-        "fuel_plan": {
-            "stops": stops,
-            "stop_count": len(stops),
-            "total_cost_usd": round(fuel_plan.total_cost, MONEY_DP),
-            "total_gallons": round(fuel_plan.total_gallons, MONEY_DP),
-            "average_price_per_gallon": round(average_price, PRICE_DP),
-        },
-        "route": {
-            "provider": result.route.provider,
-            "distance_miles": round(result.route.distance_miles, MILES_DP),
-            "duration_hours": round(result.route.duration_seconds / 3600, MONEY_DP),
-            "geometry": {"type": "LineString", "coordinates": geometry_coordinates},
-        },
-        "assumptions": {
+    assumptions: dict[str, Any] = {}
+    snapped_endpoint = _snapped_endpoint_note(result)
+    if snapped_endpoint is not None:
+        assumptions["snapped_endpoint"] = snapped_endpoint
+    if result.origin_price_source == ORIGIN_SOURCE_NONE:
+        assumptions["trivial_route"] = (
+            "start and finish coincide, so there is no route to drive and no fuel to "
+            "buy. The routing provider was not called."
+        )
+
+    assumptions.update(
+        {
             "empty_tank": (
                 "The tank is treated as empty at the origin and empty on arrival, aside "
                 "from any initial_fuel_miles supplied."
@@ -194,7 +264,55 @@ def build_response_payload(result: PlanResult, total_ms: float) -> dict[str, Any
                 f"Only stations within {result.corridor_miles:.1f} miles of the route "
                 "are considered as candidates."
             ),
+            "simplification": _simplification_note(result),
+        }
+    )
+
+    # Key order matters here for a human reading the raw body in a browser. The route
+    # geometry can run to tens of thousands of coordinates and would otherwise bury the
+    # answer, so the plan and the totals come first and the geometry sits near the end.
+    return {
+        "request": {
+            "start": {
+                "query": result.start.query,
+                "latitude": round(result.start.latitude, COORD_DP),
+                "longitude": round(result.start.longitude, COORD_DP),
+                "snapped_to_road_miles": round(result.route.origin_snap_miles, MILES_DP),
+            },
+            "finish": {
+                "query": result.finish.query,
+                "latitude": round(result.finish.latitude, COORD_DP),
+                "longitude": round(result.finish.longitude, COORD_DP),
+                "snapped_to_road_miles": round(result.route.destination_snap_miles, MILES_DP),
+            },
+            "range_miles": round(result.range_miles, MILES_DP),
+            "mpg": round(result.mpg, MILES_DP),
+            "corridor_miles": round(result.corridor_miles, MILES_DP),
+            "initial_fuel_miles": round(result.initial_fuel_miles, MILES_DP),
+            "geometry": result.geometry,
         },
+        # The link that turns "return a map of the route" into something a browser can
+        # open, rather than something the caller has to assemble from the parameters
+        # they just sent. Near the top because it is the one field a human pastes.
+        "map_url": map_url,
+        "fuel_plan": {
+            "stops": stops,
+            "stop_count": len(stops),
+            "total_cost_usd": round(fuel_plan.total_cost, MONEY_DP),
+            "total_gallons": round(fuel_plan.total_gallons, GALLONS_DP),
+            "average_price_per_gallon": round(average_price, PRICE_DP),
+        },
+        "route": {
+            "provider": result.route.provider,
+            "distance_miles": round(result.route.distance_miles, MILES_DP),
+            "duration_hours": round(result.route.duration_seconds / 3600, MONEY_DP),
+            # Both counts, so a caller can see what was dropped without asking for the
+            # full geometry to compare against.
+            "geometry_vertices": len(geometry_coordinates),
+            "source_vertices": len(result.route.coordinates),
+            "geometry": {"type": "LineString", "coordinates": geometry_coordinates},
+        },
+        "assumptions": assumptions,
         "performance": {
             "total_ms": round(total_ms, 2),
             "routing_ms": round(result.routing_ms, 2),

@@ -195,6 +195,15 @@ disagreed with it on 680 of 1483 feasible instances, worst case by $34. With the
 corrected to put a real pump at the origin and the clause order fixed, the same brute
 force agreed on all 1483.
 
+The same cross check was then run on the real thing rather than on synthetic
+instances: 25 random pairs of large US cities, routed through OSRM, matched against the
+real station file with the corridor, pruning and departure pump rules exactly as the
+service applies them, then handed to both the greedy and an exact dynamic program over
+station and fuel level with offsets on a five mile grid so the state stays integral.
+All 25 agreed to the cent, on routes from 136 miles (Memphis to Little Rock) to 2,750
+miles (Seattle to Baltimore) and from 15 to 171 candidate stations. The synthetic
+instances prove the algorithm; these prove the pipeline that feeds it.
+
 Complexity is `O(k^2)` in the worst case for `k` candidate stations, since each stop
 scans the stations within range, and close to `O(k)` in practice because the window is
 bounded by the tank range. For a coast to coast route `k` is a few hundred and the
@@ -207,8 +216,28 @@ resolved coordinates and every numeric parameter. A hit skips the routing call
 completely and reports `external_api_calls: 0` and `cache: "hit"`. Repeat requests
 therefore cost single digit milliseconds and no external traffic at all.
 
+A miss also takes a per key lock before it calls the provider. Without that, several
+identical requests arriving together would each miss the cache and each call OSRM,
+because none has stored a result yet. With it, the first computes and the rest wait
+and then read its plan: six simultaneous cold requests were measured making exactly
+one external call. The lock table and the cache are both per process, which is the
+right scope for each other.
+
 The station table is loaded once per process and held in memory. The place index is
 loaded lazily on first use and held the same way.
+
+## Thinning the geometry that leaves the building
+
+OSRM describes Seattle to Miami with 35,438 vertices, about one every 500 feet. That
+is the right density for matching stations against the road, and the wrong density for
+a JSON body: 831 KB to draw a line no screen resolves to that detail. So the response
+geometry is run through Douglas-Peucker at a 0.02 mile tolerance, about 30 metres,
+which keeps 3,396 vertices in an 88 KB body, with the guarantee that no vertex OSRM
+sent lies further than the tolerance from the returned line. Station matching runs on
+the full polyline before any of this, so the plan is identical whether the caller asks
+for the thinned line or, with `geometry=full`, the provider's own. The thinning costs
+about 100 ms of CPU on a coast to coast route, which is stated in the README rather
+than hidden, and both vertex counts are reported on every response.
 
 ## What is deliberately not here
 

@@ -23,3 +23,27 @@ ignore = ["B008"]
 [tool.ruff.lint.per-file-ignores]
 "config/settings.py" = ["E501"]
 "fuelroute/tests/*" = ["ARG001", "ARG002"]
+
+[tool.coverage.run]
+source = ["fuelroute", "config"]
+omit = [
+    "fuelroute/tests/*",
+    "config/asgi.py",
+    "config/wsgi.py",
+    "manage.py",
+]
+
+[tool.mypy]
+python_version = "3.12"
+strict = false
+ignore_missing_imports = true
+check_untyped_defs = true
+warn_unused_ignores = true
+
+# The routing tests pass a hand written fake where the runtime type is a requests
+# Session. Structural equivalence is the point of that fake, and the calls are
+# checked for real by running them, so only the argument type check is dropped, and
+# only in that one module. Everything else in the suite is checked normally.
+[[tool.mypy.overrides]]
+module = "fuelroute.tests.test_routing"
+disable_error_code = ["arg-type"]

@@ -1,0 +1,26 @@
+# One service, no dependencies. The API keeps no state, so there is no database
+# container, no volume and nothing to wait for on startup.
+#
+#   docker compose up --build
+#   curl "http://127.0.0.1:8000/api/v1/route-plan?start=Denver,+CO&finish=Chicago,+IL"
+#
+# Every variable below is optional. With none of them set the container runs on the
+# same defaults as `python manage.py runserver`: DEBUG off, ALLOWED_HOSTS "*", and the
+# public OSRM demo server as the routing provider.
+name: fuel-route-optimizer
+
+services:
+  api:
+    build: .
+    image: fuel-route-optimizer
+    ports:
+      - "8000:8000"
+    environment:
+      - OSRM_BASE_URL=${OSRM_BASE_URL:-https://router.project-osrm.org}
+      - DJANGO_ALLOWED_HOSTS=${DJANGO_ALLOWED_HOSTS:-*}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      # Listed without a value on purpose. It is forwarded only when it is set on the
+      # host, so an unset key falls through to the development default in settings
+      # rather than being overridden with an empty string, which Django rejects.
+      - DJANGO_SECRET_KEY
+    restart: unless-stopped
