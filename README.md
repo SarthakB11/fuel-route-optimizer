@@ -1,5 +1,10 @@
 # Fuel Route Optimizer
 
+[![CI](https://github.com/SarthakB11/fuel-route-optimizer/actions/workflows/ci.yml/badge.svg)](https://github.com/SarthakB11/fuel-route-optimizer/actions/workflows/ci.yml)
+[![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/downloads/)
+[![Django 6.1](https://img.shields.io/badge/django-6.1-092E20.svg)](https://www.djangoproject.com/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+
 A Django API that plans a driving route between two US locations and works out the
 cheapest way to fuel a 500 mile vehicle along it.
 

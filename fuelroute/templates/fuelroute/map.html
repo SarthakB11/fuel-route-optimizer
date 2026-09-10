@@ -120,6 +120,29 @@
         color: var(--error-text);
         font-size: 0.9rem;
       }
+
+      .stop-pin-wrapper {
+        background: none;
+        border: none;
+      }
+      .stop-pin {
+        width: 26px;
+        height: 26px;
+        border-radius: 50%;
+        background: #1c5fbf;
+        color: #fff;
+        border: 2px solid #fff;
+        box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
+        font:
+          600 12px/22px system-ui,
+          -apple-system,
+          Segoe UI,
+          sans-serif;
+        text-align: center;
+      }
+      .stop-pin-departure {
+        background: #16a34a;
+      }
     </style>
   </head>
   <body>
@@ -278,12 +301,25 @@
         map.fitBounds(routeLayer.getBounds(), { padding: [24, 24] });
 
         data.fuel_plan.stops.forEach((stop, index) => {
-          const marker = L.marker([stop.latitude, stop.longitude]).addTo(
-            markerLayer,
-          );
+          // Number every pin so the order of the plan is readable straight off the
+          // map. The departure fill up is marked separately because it sits at mile
+          // zero and would otherwise look like a stop the driver makes on the way.
+          const isDeparture = stop.kind === "departure_fill_up";
+          const marker = L.marker([stop.latitude, stop.longitude], {
+            icon: L.divIcon({
+              className: "stop-pin-wrapper",
+              html:
+                `<div class="stop-pin${isDeparture ? " stop-pin-departure" : ""}">` +
+                `${index + 1}</div>`,
+              iconSize: [26, 26],
+              iconAnchor: [13, 13],
+              popupAnchor: [0, -13],
+            }),
+          }).addTo(markerLayer);
           const popup =
             `<strong>${index + 1}. ${stop.name}</strong><br>` +
             `${stop.city}, ${stop.state}<br>` +
+            `${isDeparture ? "Departure fill up" : "Mile " + stop.offset_miles}<br>` +
             `Price: ${usd(stop.price_per_gallon)}/gal<br>` +
             `Gallons: ${stop.gallons}<br>` +
             `Cost: ${usd(stop.cost_usd)}`;
