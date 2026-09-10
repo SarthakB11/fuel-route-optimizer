@@ -98,11 +98,11 @@ off the route it sits, the price, the gallons to buy, the cost, and the running 
 
 Errors return `{"error": ..., "detail": ...}`:
 
-| Status | When |
-|---|---|
-| 400 | A bad parameter, or a place that cannot be resolved or is ambiguous |
-| 422 | The trip cannot be driven: no road route between the points, no station within the corridor, or a gap wider than the tank range |
-| 502 | The routing provider itself failed |
+| Status | When                                                                                                                            |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------- |
+| 400    | A bad parameter, or a place that cannot be resolved or is ambiguous                                                             |
+| 422    | The trip cannot be driven: no road route between the points, no station within the corridor, or a gap wider than the tank range |
+| 502    | The routing provider itself failed                                                                                              |
 
 The distinction between 422 and 502 is deliberate. Asking for Los Angeles to Honolulu
 is not a provider outage, it is a trip that cannot be driven, and the caller should not
@@ -174,12 +174,12 @@ The routing call dominates, which is exactly why it happens once and gets cached
 Measured on Seattle to Miami, 3,301 miles, 35,438 geometry vertices from OSRM, 398
 candidate stations in the corridor, 20 fuel stops:
 
-| Stage | Time |
-|---|---|
-| OSRM routing call | 1,200 to 1,600 ms |
-| All local work: resample, match stations, optimise, serialise | 53 ms |
-| **Total, cold** | **1,300 to 1,900 ms** |
-| **Total, cached repeat** | **4 to 5 ms, zero external calls** |
+| Stage                                                         | Time                               |
+| ------------------------------------------------------------- | ---------------------------------- |
+| OSRM routing call                                             | 1,200 to 1,600 ms                  |
+| All local work: resample, match stations, optimise, serialise | 53 ms                              |
+| **Total, cold**                                               | **1,300 to 1,900 ms**              |
+| **Total, cached repeat**                                      | **4 to 5 ms, zero external calls** |
 
 Los Angeles to New York, 2,793 miles with 477 candidates, has the same shape: 52 ms of
 local work on top of whatever the routing call costs.
