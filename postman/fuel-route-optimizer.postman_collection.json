@@ -1,0 +1,240 @@
+{
+  "info": {
+    "name": "Fuel Route Optimizer",
+    "description": "Worked examples for the fuel route optimizer API. Set the collection variable base_url if the service is not on http://127.0.0.1:8000.\n\nRun the requests top to bottom. The coast to coast example forces several fuel stops, and running it twice in a row demonstrates the cache: the second call reports external_api_calls 0 and returns in single digit milliseconds.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://127.0.0.1:8000",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "1. Health",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/api/v1/health",
+          "host": ["{{base_url}}"],
+          "path": ["api", "v1", "health"]
+        },
+        "description": "Confirms the service is up and reports how many stations are loaded and when the dataset was generated."
+      },
+      "response": []
+    },
+    {
+      "name": "2. Seattle to Miami (coast to coast, several stops)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const body = pm.response.json();",
+              "pm.test('200 OK', () => pm.response.to.have.status(200));",
+              "pm.test('exactly one external routing call', () =>",
+              "    pm.expect(body.performance.external_api_calls).to.eql(1));",
+              "pm.test('multiple fuel stops', () =>",
+              "    pm.expect(body.fuel_plan.stop_count).to.be.above(4));",
+              "pm.test('no leg exceeds the tank range', () => {",
+              "    const stops = body.fuel_plan.stops;",
+              "    const range = body.request.range_miles;",
+              "    let previous = 0;",
+              "    stops.forEach((stop) => {",
+              "        pm.expect(stop.offset_miles - previous).to.be.at.most(range + 0.5);",
+              "        previous = stop.offset_miles;",
+              "    });",
+              "    pm.expect(body.route.distance_miles - previous).to.be.at.most(range + 0.5);",
+              "});",
+              "pm.test('gallons match distance at the stated mpg', () =>",
+              "    pm.expect(body.fuel_plan.total_gallons * body.request.mpg)",
+              "      .to.be.closeTo(body.route.distance_miles, 1.0));",
+              "console.log('stops', body.fuel_plan.stop_count,",
+              "            'cost $' + body.fuel_plan.total_cost_usd,",
+              "            'total_ms', body.performance.total_ms);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/api/v1/route-plan?start=Seattle, WA&finish=Miami, FL",
+          "host": ["{{base_url}}"],
+          "path": ["api", "v1", "route-plan"],
+          "query": [
+            { "key": "start", "value": "Seattle, WA" },
+            { "key": "finish", "value": "Miami, FL" }
+          ]
+        },
+        "description": "About 3,300 miles, so a 500 mile tank forces at least seven fill ups. Seattle has stations within the origin radius, so origin_price_source reports the cheapest station near the origin."
+      },
+      "response": []
+    },
+    {
+      "name": "3. Seattle to Miami again (cache hit)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const body = pm.response.json();",
+              "pm.test('served from cache', () =>",
+              "    pm.expect(body.performance.cache).to.eql('hit'));",
+              "pm.test('no external call at all', () =>",
+              "    pm.expect(body.performance.external_api_calls).to.eql(0));",
+              "console.log('cached total_ms', body.performance.total_ms);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/api/v1/route-plan?start=Seattle, WA&finish=Miami, FL",
+          "host": ["{{base_url}}"],
+          "path": ["api", "v1", "route-plan"],
+          "query": [
+            { "key": "start", "value": "Seattle, WA" },
+            { "key": "finish", "value": "Miami, FL" }
+          ]
+        },
+        "description": "The identical request a second time. The plan is memoised, so this makes no external call and returns in single digit milliseconds."
+      },
+      "response": []
+    },
+    {
+      "name": "4. Los Angeles to New York (origin with no nearby station)",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/api/v1/route-plan?start=Los Angeles, CA&finish=New York, NY",
+          "host": ["{{base_url}}"],
+          "path": ["api", "v1", "route-plan"],
+          "query": [
+            { "key": "start", "value": "Los Angeles, CA" },
+            { "key": "finish", "value": "New York, NY" }
+          ]
+        },
+        "description": "About 2,800 miles. The price file carries no truck stop within 25 miles of Los Angeles, so origin_price_source reports that the departure price came from the nearest station along the route instead. The assumptions block in the response says so explicitly."
+      },
+      "response": []
+    },
+    {
+      "name": "5. Chicago to Houston (mid length)",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/api/v1/route-plan?start=Chicago, IL&finish=Houston, TX",
+          "host": ["{{base_url}}"],
+          "path": ["api", "v1", "route-plan"],
+          "query": [
+            { "key": "start", "value": "Chicago, IL" },
+            { "key": "finish", "value": "Houston, TX" }
+          ]
+        },
+        "description": "About 1,090 miles through dense truck stop country, so the optimiser has plenty of choice."
+      },
+      "response": []
+    },
+    {
+      "name": "6. Coordinates instead of place names",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/api/v1/route-plan?start=39.7392,-104.9903&finish=39.0997,-94.5786",
+          "host": ["{{base_url}}"],
+          "path": ["api", "v1", "route-plan"],
+          "query": [
+            { "key": "start", "value": "39.7392,-104.9903" },
+            { "key": "finish", "value": "39.0997,-94.5786" }
+          ]
+        },
+        "description": "Denver to Kansas City given as raw coordinates. Both forms resolve locally with no geocoding call."
+      },
+      "response": []
+    },
+    {
+      "name": "7. Tuned parameters (small tank, wide corridor)",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/api/v1/route-plan?start=Denver, CO&finish=Chicago, IL&range_miles=250&mpg=6.5&corridor_miles=25",
+          "host": ["{{base_url}}"],
+          "path": ["api", "v1", "route-plan"],
+          "query": [
+            { "key": "start", "value": "Denver, CO" },
+            { "key": "finish", "value": "Chicago, IL" },
+            { "key": "range_miles", "value": "250" },
+            { "key": "mpg", "value": "6.5" },
+            { "key": "corridor_miles", "value": "25" }
+          ]
+        },
+        "description": "A loaded truck rather than the default vehicle: half the range and 6.5 mpg, which roughly doubles the number of stops and the cost."
+      },
+      "response": []
+    },
+    {
+      "name": "8. Error: unknown place (400)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('400 with a readable error', () => {",
+              "    pm.response.to.have.status(400);",
+              "    pm.expect(pm.response.json()).to.have.property('error');",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/api/v1/route-plan?start=Nowhereville, ZZ&finish=Miami, FL",
+          "host": ["{{base_url}}"],
+          "path": ["api", "v1", "route-plan"],
+          "query": [
+            { "key": "start", "value": "Nowhereville, ZZ" },
+            { "key": "finish", "value": "Miami, FL" }
+          ]
+        },
+        "description": "An unresolvable place returns 400 with a message naming the input, never a stack trace."
+      },
+      "response": []
+    },
+    {
+      "name": "9. Error: invalid parameter (400)",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/api/v1/route-plan?start=Denver, CO&finish=Chicago, IL&mpg=0",
+          "host": ["{{base_url}}"],
+          "path": ["api", "v1", "route-plan"],
+          "query": [
+            { "key": "start", "value": "Denver, CO" },
+            { "key": "finish", "value": "Chicago, IL" },
+            { "key": "mpg", "value": "0" }
+          ]
+        },
+        "description": "Zero mpg is rejected by validation with a field level detail."
+      },
+      "response": []
+    }
+  ]
+}
