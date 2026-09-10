@@ -42,6 +42,10 @@ DEFAULT_OVERRIDES = Path("data/geocode_overrides.json")
 DEFAULT_STATIONS_OUT = Path("data/stations.json")
 DEFAULT_PLACES_OUT = Path("data/places.json")
 DEFAULT_MIN_PLACE_POPULATION = 1000
+# Alternate GeoNames names are only indexed for places at least this populous, since
+# alternate names on tiny places are mostly noise. A station city is always included
+# regardless of population, see build_places_payload.
+ALT_NAME_MIN_POPULATION = 50000
 
 # US bounding box used as a sanity guard on every resolved coordinate. Generous enough to
 # cover the continental states, Alaska and Hawaii without pinning down individual states.
@@ -64,6 +68,12 @@ STATE_NAMES: dict[str, str] = {
 }  # fmt: skip
 VALID_STATES: frozenset[str] = frozenset(STATE_NAMES.values())
 assert len(VALID_STATES) == 51, "50 states plus DC"  # noqa: S101
+# Alternate names that normalise to a bare two letter state code are junk (GeoNames lists
+# postal abbreviations such as "NY" alongside real alternate names like "New York"), so
+# they are skipped when building places.json. Full state names are not skipped: "New
+# York" is both the state's full name and the colloquial name for New York City, and the
+# latter is exactly the alternate name places.json needs to index.
+STATE_ABBREVIATION_KEYS: frozenset[str] = VALID_STATES
 
 GEONAMES_COLUMNS = [
     "geonameid", "name", "asciiname", "alternatenames", "latitude", "longitude",
@@ -93,6 +103,9 @@ class Gazetteer:
     # kept separately from the min population filtered by_name so places.json can apply
     # its own population threshold.
     all_places: dict[tuple[str, str], GazetteerEntry] = field(default_factory=dict)
+    # One row per qualifying GeoNames place, kept for a second pass over alternate names
+    # when building places.json. (state, name_key, entry, raw alternatenames field.)
+    place_rows: list[tuple[str, str, GazetteerEntry, str]] = field(default_factory=list)
 
     def resolve(self, city: str, state: str) -> tuple[GazetteerEntry, str] | None:
         """Look up a city in state through the three GeoNames tiers, in order."""
@@ -187,6 +200,7 @@ def load_gazetteer(geonames_path: Path) -> Gazetteer:
                     alt_key = normalize_place_name(alt)
                     if alt_key and alt_key != name_key:
                         _keep_max_population(gazetteer.by_alternate_name, (state, alt_key), entry)
+            gazetteer.place_rows.append((state, name_key, entry, alternate_names))
     logger.info(
         "read %d GeoNames rows, %d feature class P entries in scope",
         row_count,
@@ -356,18 +370,53 @@ def build_places_payload(
     gazetteer: Gazetteer,
     resolved: list[GeocodedStop],
     min_place_population: int,
-) -> dict[str, Any]:
-    """Assemble the data/places.json offline location index."""
+    alt_name_min_population: int = ALT_NAME_MIN_POPULATION,
+) -> tuple[dict[str, Any], int]:
+    """Assemble the data/places.json offline location index.
+
+    Returns the payload and the number of alternate name keys it added, so callers can
+    report on the alternate name pass.
+    """
     # (name_key, state) -> (latitude, longitude, population or None for station only rows)
     merged: dict[tuple[str, str], tuple[float, float, int | None]] = {}
     for (state, name_key), entry in gazetteer.all_places.items():
         if entry.population >= min_place_population:
             merged[(state, name_key)] = (entry.latitude, entry.longitude, entry.population)
+    station_keys: set[tuple[str, str]] = set()
     for item in resolved:
         name_key = normalize_place_name(item.stop.city)
         if not name_key:
             continue
+        station_keys.add((item.stop.state, name_key))
         merged[(item.stop.state, name_key)] = (item.latitude, item.longitude, None)
+
+    # Second pass: alternate GeoNames names, so a colloquial input like "New York, NY"
+    # resolves even though the GeoNames primary name is "New York City". A primary or
+    # ascii name already in merged always wins, so an alternate can never displace it.
+    alt_candidates: dict[tuple[str, str], tuple[float, float, int]] = {}
+    for state, name_key, entry, alternate_names in gazetteer.place_rows:
+        if not alternate_names:
+            continue
+        if entry.population < alt_name_min_population and (state, name_key) not in station_keys:
+            continue
+        for alt in alternate_names.split(","):
+            alt = alt.strip()
+            if not alt or not alt.isascii():
+                continue
+            alt_key = normalize_place_name(alt)
+            if not alt_key or alt_key == name_key or alt_key in STATE_ABBREVIATION_KEYS:
+                continue
+            candidate_key = (state, alt_key)
+            existing = alt_candidates.get(candidate_key)
+            if existing is None or entry.population > existing[2]:
+                alt_candidates[candidate_key] = (entry.latitude, entry.longitude, entry.population)
+
+    alt_keys_added = 0
+    for key, (latitude, longitude, population) in alt_candidates.items():
+        if key in merged:
+            continue
+        merged[key] = (latitude, longitude, population)
+        alt_keys_added += 1
 
     by_city_state: dict[str, list[float]] = {}
     by_city: dict[str, list[list[float | str]]] = {}
@@ -377,11 +426,12 @@ def build_places_payload(
     for entries in by_city.values():
         entries.sort(key=lambda entry: entry[2])
 
-    return {
+    payload = {
         "by_city_state": by_city_state,
         "by_city": by_city,
         "state_names": dict(sorted(STATE_NAMES.items())),
     }
+    return payload, alt_keys_added
 
 
 def print_summary(
@@ -394,6 +444,7 @@ def print_summary(
     stations_path: Path,
     places_path: Path,
     out_of_bounds: int,
+    alt_keys_added: int,
 ) -> None:
     """Print the human readable build report."""
     lines = [
@@ -422,6 +473,7 @@ def print_summary(
         lines.append(f"  stop_id={stop.stop_id} city={stop.city!r} state={stop.state}")
     lines.append(f"Coordinates outside the US sanity bounding box: {out_of_bounds}")
     lines.append("")
+    lines.append(f"Alternate name keys added to places.json: {alt_keys_added}")
     lines.append(f"{stations_path}: {stations_path.stat().st_size:,} bytes")
     lines.append(f"{places_path}: {places_path.stat().st_size:,} bytes")
     print("\n".join(lines))  # noqa: T201
@@ -448,6 +500,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=int,
         default=DEFAULT_MIN_PLACE_POPULATION,
         help="Population floor for places.json entries not tied to a station",
+    )
+    parser.add_argument(
+        "--alt-name-min-population",
+        type=int,
+        default=ALT_NAME_MIN_POPULATION,
+        help="Population floor for indexing a place's GeoNames alternate names",
     )
     parser.add_argument(
         "--generated-at",
@@ -487,7 +545,9 @@ def main(argv: list[str] | None = None) -> int:
     stations_payload = build_stations_payload(
         resolved, args.csv, len(us_rows) + non_us_dropped, non_us_dropped, len(stops), generated_at
     )
-    places_payload = build_places_payload(gazetteer, resolved, args.min_place_population)
+    places_payload, alt_keys_added = build_places_payload(
+        gazetteer, resolved, args.min_place_population, args.alt_name_min_population
+    )
 
     args.stations_out.parent.mkdir(parents=True, exist_ok=True)
     args.stations_out.write_text(
@@ -512,6 +572,7 @@ def main(argv: list[str] | None = None) -> int:
         args.stations_out,
         args.places_out,
         out_of_bounds,
+        alt_keys_added,
     )
     return 0
 
