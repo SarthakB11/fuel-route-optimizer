@@ -1,0 +1,363 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Fuel route planner</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+      crossorigin=""
+    />
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #f7f7f5;
+        --panel-bg: #ffffff;
+        --text: #1c1c1e;
+        --muted: #6b6b6f;
+        --border: #dcdcdc;
+        --accent: #1c5fbf;
+        --error-bg: #fdecec;
+        --error-text: #9c1c1c;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        font-family:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        background: var(--bg);
+        color: var(--text);
+      }
+      header {
+        padding: 16px 20px;
+        background: var(--panel-bg);
+        border-bottom: 1px solid var(--border);
+      }
+      h1 {
+        margin: 0 0 12px;
+        font-size: 1.25rem;
+      }
+      form {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        align-items: flex-end;
+      }
+      label {
+        display: flex;
+        flex-direction: column;
+        font-size: 0.75rem;
+        color: var(--muted);
+        gap: 4px;
+      }
+      input {
+        padding: 6px 8px;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        font-size: 0.9rem;
+        min-width: 110px;
+      }
+      button {
+        padding: 8px 16px;
+        border: none;
+        border-radius: 6px;
+        background: var(--accent);
+        color: #fff;
+        font-size: 0.9rem;
+        cursor: pointer;
+      }
+      button:hover {
+        opacity: 0.9;
+      }
+      #layout {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        padding: 12px;
+      }
+      #map {
+        flex: 1 1 480px;
+        height: 70vh;
+        min-height: 360px;
+        border-radius: 8px;
+        border: 1px solid var(--border);
+      }
+      #summary {
+        flex: 0 0 280px;
+        background: var(--panel-bg);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 16px;
+        height: fit-content;
+      }
+      #summary h2 {
+        margin-top: 0;
+        font-size: 1rem;
+      }
+      #summary dl {
+        margin: 0;
+      }
+      #summary dt {
+        color: var(--muted);
+        font-size: 0.75rem;
+        margin-top: 8px;
+      }
+      #summary dd {
+        margin: 0;
+        font-size: 1rem;
+        font-weight: 600;
+      }
+      #error {
+        display: none;
+        margin: 12px;
+        padding: 12px 16px;
+        border-radius: 8px;
+        background: var(--error-bg);
+        color: var(--error-text);
+        font-size: 0.9rem;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Fuel route planner</h1>
+      <form id="plan-form">
+        <label
+          >Start
+          <input
+            type="text"
+            name="start"
+            id="start"
+            placeholder="Los Angeles, CA"
+            required
+          />
+        </label>
+        <label
+          >Finish
+          <input
+            type="text"
+            name="finish"
+            id="finish"
+            placeholder="New York, NY"
+            required
+          />
+        </label>
+        <label
+          >Range (miles)
+          <input
+            type="number"
+            name="range_miles"
+            id="range_miles"
+            step="1"
+            min="1"
+          />
+        </label>
+        <label
+          >MPG
+          <input type="number" name="mpg" id="mpg" step="0.1" min="0.1" />
+        </label>
+        <label
+          >Corridor (miles)
+          <input
+            type="number"
+            name="corridor_miles"
+            id="corridor_miles"
+            step="1"
+            min="1"
+            max="50"
+          />
+        </label>
+        <label
+          >Initial fuel (miles)
+          <input
+            type="number"
+            name="initial_fuel_miles"
+            id="initial_fuel_miles"
+            step="1"
+            min="0"
+          />
+        </label>
+        <button type="submit">Plan route</button>
+      </form>
+    </header>
+
+    <div id="error"></div>
+
+    <div id="layout">
+      <div id="map"></div>
+      <div id="summary">
+        <h2>Trip summary</h2>
+        <dl id="summary-list">
+          <dt>Distance</dt>
+          <dd id="summary-distance">-</dd>
+          <dt>Stops</dt>
+          <dd id="summary-stops">-</dd>
+          <dt>Total gallons</dt>
+          <dd id="summary-gallons">-</dd>
+          <dt>Total cost</dt>
+          <dd id="summary-cost">-</dd>
+          <dt>Routing time</dt>
+          <dd id="summary-routing-ms">-</dd>
+          <dt>Compute time</dt>
+          <dd id="summary-compute-ms">-</dd>
+          <dt>Total time</dt>
+          <dd id="summary-total-ms">-</dd>
+          <dt>Cache</dt>
+          <dd id="summary-cache">-</dd>
+        </dl>
+      </div>
+    </div>
+
+    <script
+      src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+      integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+      crossorigin=""
+    ></script>
+    <script>
+      const map = L.map("map").setView([39.5, -98.35], 4);
+      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        maxZoom: 18,
+        attribution: "&copy; OpenStreetMap contributors",
+      }).addTo(map);
+
+      let routeLayer = null;
+      let markerLayer = L.layerGroup().addTo(map);
+
+      function showError(message) {
+        const box = document.getElementById("error");
+        box.textContent = message;
+        box.style.display = "block";
+      }
+
+      function hideError() {
+        const box = document.getElementById("error");
+        box.style.display = "none";
+        box.textContent = "";
+      }
+
+      function usd(value) {
+        return "$" + Number(value).toFixed(2);
+      }
+
+      function fillFormFromQuery(params) {
+        for (const key of [
+          "start",
+          "finish",
+          "range_miles",
+          "mpg",
+          "corridor_miles",
+          "initial_fuel_miles",
+        ]) {
+          const value = params.get(key);
+          if (value !== null) {
+            const field = document.getElementById(key);
+            if (field) field.value = value;
+          }
+        }
+      }
+
+      function renderPlan(data) {
+        hideError();
+
+        if (routeLayer) {
+          map.removeLayer(routeLayer);
+        }
+        markerLayer.clearLayers();
+
+        const latLngs = data.route.geometry.coordinates.map(([lon, lat]) => [
+          lat,
+          lon,
+        ]);
+        routeLayer = L.polyline(latLngs, { color: "#1c5fbf", weight: 4 }).addTo(
+          map,
+        );
+        map.fitBounds(routeLayer.getBounds(), { padding: [24, 24] });
+
+        data.fuel_plan.stops.forEach((stop, index) => {
+          const marker = L.marker([stop.latitude, stop.longitude]).addTo(
+            markerLayer,
+          );
+          const popup =
+            `<strong>${index + 1}. ${stop.name}</strong><br>` +
+            `${stop.city}, ${stop.state}<br>` +
+            `Price: ${usd(stop.price_per_gallon)}/gal<br>` +
+            `Gallons: ${stop.gallons}<br>` +
+            `Cost: ${usd(stop.cost_usd)}`;
+          marker.bindPopup(popup);
+        });
+
+        document.getElementById("summary-distance").textContent =
+          data.route.distance_miles + " mi";
+        document.getElementById("summary-stops").textContent =
+          data.fuel_plan.stop_count;
+        document.getElementById("summary-gallons").textContent =
+          data.fuel_plan.total_gallons;
+        document.getElementById("summary-cost").textContent = usd(
+          data.fuel_plan.total_cost_usd,
+        );
+        document.getElementById("summary-routing-ms").textContent =
+          data.performance.routing_ms + " ms";
+        document.getElementById("summary-compute-ms").textContent =
+          data.performance.compute_ms + " ms";
+        document.getElementById("summary-total-ms").textContent =
+          data.performance.total_ms + " ms";
+        document.getElementById("summary-cache").textContent =
+          data.performance.cache;
+      }
+
+      async function planRoute(params) {
+        hideError();
+        try {
+          const response = await fetch(
+            "/api/v1/route-plan?" + params.toString(),
+          );
+          const body = await response.json();
+          if (!response.ok) {
+            const message =
+              body && body.error
+                ? body.error
+                : "The route planner returned an error.";
+            showError(message);
+            return;
+          }
+          renderPlan(body);
+        } catch (err) {
+          showError("Could not reach the route planning API: " + err.message);
+        }
+      }
+
+      document
+        .getElementById("plan-form")
+        .addEventListener("submit", (event) => {
+          event.preventDefault();
+          const form = event.target;
+          const params = new URLSearchParams();
+          for (const field of [
+            "start",
+            "finish",
+            "range_miles",
+            "mpg",
+            "corridor_miles",
+            "initial_fuel_miles",
+          ]) {
+            const value = form.elements[field].value.trim();
+            if (value) params.set(field, value);
+          }
+          const url = new URL(window.location);
+          url.search = params.toString();
+          window.history.pushState({}, "", url);
+          planRoute(params);
+        });
+
+      const initialParams = new URLSearchParams(window.location.search);
+      fillFormFromQuery(initialParams);
+      if (initialParams.get("start") && initialParams.get("finish")) {
+        planRoute(initialParams);
+      }
+    </script>
+  </body>
+</html>
