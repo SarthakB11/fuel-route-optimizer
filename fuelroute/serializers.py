@@ -118,6 +118,9 @@ def build_response_payload(result: PlanResult, total_ms: float) -> dict[str, Any
         [round(lon, COORD_DP), round(lat, COORD_DP)] for lat, lon in result.route.coordinates
     ]
 
+    # Key order matters here for a human reading the raw body in a browser. The route
+    # geometry is tens of thousands of coordinates and would otherwise bury the answer,
+    # so the plan and the totals come first and the geometry sits near the end.
     return {
         "request": {
             "start": {
@@ -135,18 +138,18 @@ def build_response_payload(result: PlanResult, total_ms: float) -> dict[str, Any
             "corridor_miles": round(result.corridor_miles, MILES_DP),
             "initial_fuel_miles": round(result.initial_fuel_miles, MILES_DP),
         },
-        "route": {
-            "provider": result.route.provider,
-            "distance_miles": round(result.route.distance_miles, MILES_DP),
-            "duration_hours": round(result.route.duration_seconds / 3600, MONEY_DP),
-            "geometry": {"type": "LineString", "coordinates": geometry_coordinates},
-        },
         "fuel_plan": {
             "stops": stops,
             "stop_count": len(stops),
             "total_cost_usd": round(fuel_plan.total_cost, MONEY_DP),
             "total_gallons": round(fuel_plan.total_gallons, MONEY_DP),
             "average_price_per_gallon": round(average_price, PRICE_DP),
+        },
+        "route": {
+            "provider": result.route.provider,
+            "distance_miles": round(result.route.distance_miles, MILES_DP),
+            "duration_hours": round(result.route.duration_seconds / 3600, MONEY_DP),
+            "geometry": {"type": "LineString", "coordinates": geometry_coordinates},
         },
         "assumptions": {
             "empty_tank": (

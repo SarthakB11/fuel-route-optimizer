@@ -18,8 +18,8 @@ GET /api/v1/route-plan?start=Seattle,%20WA&finish=Miami,%20FL
 
 ```jsonc
 {
-  "route":     { "provider": "OSRM", "distance_miles": 3301.5, "geometry": { "type": "LineString", ... } },
   "fuel_plan": { "stop_count": 20, "total_gallons": 330.15, "total_cost_usd": 1026.29, "stops": [ ... ] },
+  "route":     { "provider": "OSRM", "distance_miles": 3301.5, "geometry": { "type": "LineString", ... } },
   "performance": { "total_ms": 1857.46, "routing_ms": 1613.12, "compute_ms": 53.31, "external_api_calls": 1 }
 }
 ```
@@ -88,10 +88,14 @@ Configuration is optional and lives in environment variables; see `.env.example`
 | `corridor_miles`     | 12       | How far off the route a station may sit to count                                  |
 | `initial_fuel_miles` | 0        | Miles of fuel already in the tank at the origin                                   |
 
-The response has five blocks: `request` with the resolved inputs, `route` with the
-provider, distance, duration and GeoJSON geometry, `fuel_plan` with the ordered stops
-and the totals, `assumptions` in plain English, and `performance` with the timings and
-the external call count.
+The response has five blocks: `request` with the resolved inputs, `fuel_plan` with the
+ordered stops and the totals, `route` with the provider, distance, duration and GeoJSON
+geometry, `assumptions` in plain English, and `performance` with the timings and the
+external call count.
+
+`fuel_plan` deliberately comes before `route`. The geometry runs to tens of thousands
+of coordinates, and putting it first would bury the answer for anyone reading the raw
+body in a browser.
 
 Each stop reports the station, its coordinates, how far along the route it is, how far
 off the route it sits, the price, the gallons to buy, the cost, and the running total.

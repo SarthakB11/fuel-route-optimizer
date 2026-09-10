@@ -86,10 +86,12 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [],
     "DEFAULT_PERMISSION_CLASSES": ["rest_framework.permissions.AllowAny"],
-    "DEFAULT_RENDERER_CLASSES": [
-        "rest_framework.renderers.JSONRenderer",
-        "rest_framework.renderers.BrowsableAPIRenderer",
-    ],
+    # JSON only, deliberately. The browsable API renderer pulls its stylesheets from
+    # {% static "rest_framework/..." %}, and with DEBUG off runserver does not serve
+    # static files, so pasting an endpoint into a browser would render unstyled HTML
+    # with a screenful of 404s behind it. Browsers pretty print a JSON body natively,
+    # which is a better result than a broken page, and /map is the human facing view.
+    "DEFAULT_RENDERER_CLASSES": ["rest_framework.renderers.JSONRenderer"],
     "UNAUTHENTICATED_USER": None,
 }
 
