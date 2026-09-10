@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Django
+db.sqlite3
+*.log
+
+# Environment
+.env
+
+# Large gazetteer downloads used only by scripts/build_dataset.py
+build/
+data/geonames/
+*.zip
+US.txt
