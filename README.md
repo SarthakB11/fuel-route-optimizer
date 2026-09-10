@@ -174,19 +174,27 @@ The routing call dominates, which is exactly why it happens once and gets cached
 Measured on Seattle to Miami, 3,301 miles, 35,438 geometry vertices from OSRM, 398
 candidate stations in the corridor, 20 fuel stops:
 
-| Stage                                                         | Time                          |
-| ------------------------------------------------------------- | ----------------------------- |
-| OSRM routing call                                             | 1,613 ms                      |
-| All local work: resample, match stations, optimise, serialise | 53 ms                         |
-| **Total, cold**                                               | **1,857 ms**                  |
-| **Total, cached repeat**                                      | **5 ms, zero external calls** |
+| Stage | Time |
+|---|---|
+| OSRM routing call | 1,200 to 1,600 ms |
+| All local work: resample, match stations, optimise, serialise | 53 ms |
+| **Total, cold** | **1,300 to 1,900 ms** |
+| **Total, cached repeat** | **4 to 5 ms, zero external calls** |
 
-Los Angeles to New York, 2,793 miles with 477 candidates, has the same shape: 1,221 ms
-in OSRM, 52 ms of local work, 1,475 ms total.
+Los Angeles to New York, 2,793 miles with 477 candidates, has the same shape: 52 ms of
+local work on top of whatever the routing call costs.
 
-The routing call is about 97 percent of a cold request and is the one part not under
-this service's control, which is the whole argument for making it once and caching the
-result. The local work stays near 50 ms whether the route is 600 miles or 3,300.
+The routing call is roughly 96 percent of a cold request. It is also the only part not
+under this service's control, and it is the part that moves: the figures above are a
+range over repeated runs against the public demo server from one location, so treat
+them as indicative rather than as a benchmark. That variance is itself the argument for
+making the call once and caching the result.
+
+The number that is stable, and the one this project can fairly be judged on, is the
+local work: about 53 ms to resample a 35,000 vertex polyline, match 6,626 stations
+against it, choose 20 fuel stops and serialise the response. It stays near 50 ms
+whether the route is 600 miles or 3,300, and a cached repeat answers in about 4 ms
+having made no external call at all.
 
 Station matching avoids the obvious quadratic trap. Comparing every station to every
 one of OSRM's 34,000 geometry vertices would be 225 million distance calculations. The
