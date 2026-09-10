@@ -45,9 +45,10 @@ call the routing service **once** per request, and be **fast**.
   fewer than seven fills, and the cheapest plan is not "stop at the nearest station when
   the tank runs low": on Seattle to Miami the optimiser buys 1.3 gallons at one station
   purely to reach a cheaper one, and fills the tank outright at the cheapest station on
-  the route. It comes in at $1,026 against $1,155 for the same trip bought at the price
-  file's average, and the test suite checks the result against an exact dynamic program
-  on randomised instances rather than trusting that it looks reasonable.
+  the route. It comes in at $1,026 against $1,102 for the same fuel bought at the
+  average price of the stations actually on that route, and the test suite checks the
+  result against an exact dynamic program on randomised instances rather than trusting
+  that it looks reasonable.
 
 ## Quick start
 
@@ -73,20 +74,23 @@ curl "http://127.0.0.1:8000/api/v1/route-plan?start=Denver,+CO&finish=Chicago,+I
 No database to create, no migrations to run, no API key to obtain. The station dataset
 is committed, so a clean checkout works immediately.
 
-Configuration is optional and lives in environment variables; see `.env.example`.
+Configuration is optional and lives in environment variables. `.env.example` lists
+every variable with its default; export the ones you want to change, or load the file
+with your own tooling. Nothing in the project reads a `.env` file automatically, so
+there is no hidden configuration step.
 
 ## The API
 
 ### `GET /api/v1/route-plan`
 
-| Parameter            | Default  | Meaning                                                                           |
-| -------------------- | -------- | --------------------------------------------------------------------------------- |
-| `start`              | required | Origin. `"Denver, CO"`, `"Denver, Colorado"`, `"Denver"` or `"39.7392,-104.9903"` |
-| `finish`             | required | Destination, same formats                                                         |
-| `range_miles`        | 500      | How far the vehicle goes on a full tank                                           |
-| `mpg`                | 10       | Miles per gallon                                                                  |
-| `corridor_miles`     | 12       | How far off the route a station may sit to count                                  |
-| `initial_fuel_miles` | 0        | Miles of fuel already in the tank at the origin                                   |
+| Parameter            | Default  | Meaning                                                                                                                                                                                       |
+| -------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `start`              | required | Origin. `"Denver, CO"`, `"Denver, Colorado"` or `"39.7392,-104.9903"`. A bare city name works only when it is unique nationally; `"Denver"` matches four states and returns a 400 naming them |
+| `finish`             | required | Destination, same formats                                                                                                                                                                     |
+| `range_miles`        | 500      | How far the vehicle goes on a full tank                                                                                                                                                       |
+| `mpg`                | 10       | Miles per gallon                                                                                                                                                                              |
+| `corridor_miles`     | 12       | How far off the route a station may sit to count                                                                                                                                              |
+| `initial_fuel_miles` | 0        | Miles of fuel already in the tank at the origin                                                                                                                                               |
 
 The response has five blocks: `request` with the resolved inputs, `fuel_plan` with the
 ordered stops and the totals, `route` with the provider, distance, duration and GeoJSON
@@ -176,7 +180,8 @@ a small dynamic program to stay optimal. That is a deliberate non goal here.
 The routing call dominates, which is exactly why it happens once and gets cached.
 
 Measured on Seattle to Miami, 3,301 miles, 35,438 geometry vertices from OSRM, 398
-candidate stations in the corridor, 20 fuel stops:
+stations matched inside the corridor which collapse to 183 distinct positions, 20 fuel
+stops:
 
 | Stage                                                         | Time                               |
 | ------------------------------------------------------------- | ---------------------------------- |
@@ -185,8 +190,8 @@ candidate stations in the corridor, 20 fuel stops:
 | **Total, cold**                                               | **1,300 to 1,900 ms**              |
 | **Total, cached repeat**                                      | **4 to 5 ms, zero external calls** |
 
-Los Angeles to New York, 2,793 miles with 477 candidates, has the same shape: 52 ms of
-local work on top of whatever the routing call costs.
+Los Angeles to New York, 2,793 miles, has the same shape: about 52 ms of local work on
+top of whatever the routing call costs.
 
 The routing call is roughly 96 percent of a cold request. It is also the only part not
 under this service's control, and it is the part that moves: the figures above are a
@@ -225,7 +230,27 @@ unmodified for provenance. `scripts/build_dataset.py` turns it into
 Nothing is left unresolved and the script exits non zero if anything ever is, so a
 future price file cannot quietly lose stations. Stations are placed at their city
 centroid rather than the exact highway exit, which the corridor width absorbs; detour
-distances are reported but not added to the miles driven.
+distances are reported but not added to the miles driven. Stations in the same town
+share that centroid, so only the cheapest of any group at an identical point is kept:
+a dearer station in the same place can never appear in a cheapest plan.
+
+### Where the price file has no coverage
+
+The supplied file is a snapshot of one pricing feed, not a census of US fuel stops,
+and its coverage is uneven in ways worth knowing before reading a 422:
+
+- **California has 8 stations**, all in the Imperial and Coachella valleys near the
+  southeastern border. Interstate 5 has none, so Portland to San Diego reports that it
+  cannot be completed, and Los Angeles to New York takes its departure fuel at a
+  station in Jean, Nevada, 239 miles along the route. The response says so in
+  `origin_price_source` rather than hiding it.
+- **Alaska, Hawaii and DC have none at all**, and Rhode Island has two.
+- Coverage is dense across the interstate corridors of the Midwest, the South and
+  Texas, which is where a truck stop pricing feed would be expected to concentrate.
+
+These are properties of the data, not of the service. A 422 saying the destination is
+997 miles from the last station is the correct answer to a route the file cannot
+support, and it names the gap so the cause is obvious.
 
 To rebuild from scratch, which downloads the GeoNames US gazetteer:
 
@@ -253,9 +278,6 @@ carry most of the weight:
 - **an assertion that the routing mock is called exactly once** on a cold request and
   exactly zero times on a repeat, which pins the constraint the whole design exists to
   satisfy
-
-A prose check also fails the build on stray em dashes, keeping the documentation
-consistent.
 
 ## Layout
 

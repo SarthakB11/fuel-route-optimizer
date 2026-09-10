@@ -191,30 +191,12 @@ def plan_fuel_stops(
         ]
 
         if cheaper:
+            # No destination check is needed here. "cheaper" already excludes any
+            # station at or past the destination, so the station chosen below always
+            # sits strictly before it, and buying just enough to reach it can never
+            # overshoot the end of the trip.
             next_index = min(cheaper)
             next_offset = candidates[next_index].offset_miles
-            if dest_in_range and total_distance_miles < next_offset - TOLERANCE:
-                # The destination sits closer than the cheaper station, so
-                # finish the trip here instead of overshooting it.
-                miles_needed = max(0.0, (total_distance_miles - position) - fuel)
-                gallons = miles_needed / mpg
-                cost = gallons * price
-                cumulative_cost += cost
-                tank_departure = fuel + miles_needed
-                stops.append(
-                    FuelStop(
-                        station=current.station,
-                        offset_miles=position,
-                        detour_miles=current.detour_miles,
-                        gallons=gallons,
-                        price_per_gallon=price,
-                        cost=cost,
-                        cumulative_cost=cumulative_cost,
-                        tank_miles_on_arrival=fuel,
-                        tank_miles_on_departure=tank_departure,
-                    )
-                )
-                break
             miles_needed = max(0.0, (next_offset - position) - fuel)
             tank_departure = fuel + miles_needed
         elif dest_in_range:

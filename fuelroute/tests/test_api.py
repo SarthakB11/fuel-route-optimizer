@@ -492,3 +492,71 @@ def test_root_redirects_to_map(client) -> None:
     response = client.get("/")
     assert response.status_code in (301, 302)
     assert response.url == "/map"
+
+
+def test_initial_fuel_may_not_exceed_the_tank(client, configure_dataset) -> None:
+    """A 700 mile head start in a 500 mile tank is not a plan, it is a bad request.
+
+    Left unbounded the API answered 200 and reported a tank arriving somewhere with
+    more fuel in it than the tank holds. It is also the one regime where the
+    feasibility check measures gaps against the tank range rather than the fuel
+    actually on board, so rejecting the input closes both problems at once.
+    """
+    configure_dataset(ROWS_WITHIN_RADIUS)
+    response = client.get(
+        _plan_url(
+            start="Origin City, OK",
+            finish="Finish City, AR",
+            range_miles=500,
+            initial_fuel_miles=700,
+        )
+    )
+    assert response.status_code == 400
+    assert "initial_fuel_miles" in response.json()["detail"]
+
+
+def test_initial_fuel_equal_to_the_tank_is_allowed(client, configure_dataset, monkeypatch) -> None:
+    """The boundary itself is a legitimate request: a full tank at the origin."""
+    configure_dataset(ROWS_WITHIN_RADIUS)
+    monkeypatch.setattr(routing, "fetch_route", _FakeFetchRoute())
+    response = client.get(
+        _plan_url(
+            start="Origin City, OK",
+            finish="Finish City, AR",
+            range_miles=500,
+            initial_fuel_miles=500,
+        )
+    )
+    assert response.status_code == 200
+
+
+def test_no_stop_in_a_plan_ever_buys_zero_gallons(client, configure_dataset, monkeypatch) -> None:
+    """Every stop returned is a stop the driver would actually make."""
+    configure_dataset(ROWS_WITHIN_RADIUS)
+    monkeypatch.setattr(routing, "fetch_route", _FakeFetchRoute())
+    response = client.get(_plan_url(start="Origin City, OK", finish="Finish City, AR"))
+
+    assert response.status_code == 200
+    stops = response.json()["fuel_plan"]["stops"]
+    assert stops, "expected at least one stop"
+    assert all(stop["gallons"] > 0 for stop in stops)
+
+
+def test_departure_kind_is_keyed_on_the_offset_not_the_list_position(
+    client, configure_dataset, monkeypatch
+) -> None:
+    """Only a stop at mile zero is the departure fill up.
+
+    When initial fuel lets the vehicle pass the origin pump without buying, that stop
+    is dropped and the first remaining entry is an ordinary one. Deriving the label
+    from the list position would mislabel it.
+    """
+    configure_dataset(ROWS_WITHIN_RADIUS)
+    monkeypatch.setattr(routing, "fetch_route", _FakeFetchRoute())
+    response = client.get(_plan_url(start="Origin City, OK", finish="Finish City, AR"))
+
+    stops = response.json()["fuel_plan"]["stops"]
+    for stop in stops:
+        expected = "departure_fill_up" if stop["offset_miles"] == 0.0 else "en_route"
+        assert stop["kind"] == expected
+    assert sum(1 for stop in stops if stop["kind"] == "departure_fill_up") <= 1

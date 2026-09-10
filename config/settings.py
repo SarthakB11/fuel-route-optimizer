@@ -71,7 +71,11 @@ CACHES = {
         "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
         "LOCATION": "route-plans",
         "TIMEOUT": int(os.environ.get("ROUTE_PLAN_CACHE_SECONDS", "900")),
-        "OPTIONS": {"MAX_ENTRIES": 512},
+        # A cached plan carries the full route geometry, tens of thousands of
+        # coordinates, so entries are large. 512 of them would let one worker hold
+        # hundreds of megabytes. This cache is also per process, not shared between
+        # workers, so a small ceiling costs little.
+        "OPTIONS": {"MAX_ENTRIES": 64},
     }
 }
 

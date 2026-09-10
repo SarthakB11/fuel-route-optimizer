@@ -18,7 +18,7 @@ from django.conf import settings
 from django.core.cache import cache
 
 from fuelroute import geo, places, routing, stations
-from fuelroute.optimizer import FuelPlan, RouteNotFeasible, plan_fuel_stops
+from fuelroute.optimizer import TOLERANCE, FuelPlan, RouteNotFeasible, plan_fuel_stops
 from fuelroute.stations import RouteStation
 
 # Sampling this fine keeps the corridor search accurate without materially
@@ -27,7 +27,7 @@ RESAMPLE_SPACING_MILES = 1.0
 
 # Bumped whenever the shape of the cached payload changes, so a stale entry from
 # a previous deploy is never handed back as if it matched the current code.
-CACHE_VERSION = "v1"
+CACHE_VERSION = "v2"
 
 DEFAULT_ORIGIN_RADIUS_MILES = 25.0
 
@@ -110,6 +110,61 @@ def _cache_key(
     }
     digest = hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
     return f"fuelroute:route-plan:{CACHE_VERSION}:{digest}"
+
+
+def _prune_candidates(
+    candidates: list[RouteStation], total_distance_miles: float
+) -> list[RouteStation]:
+    """Drop candidates that can never appear in an optimal plan.
+
+    Two things get removed.
+
+    Stations in one town share a city centroid, so several can land on exactly the
+    same offset along the route. Among stations at the same offset only the cheapest
+    can ever be worth stopping at: a dearer one sits in the same place, so any fuel
+    bought there could have been bought next door for less. Keeping the others is not
+    merely wasteful, it produces visible nonsense, because the greedy can "drive" zero
+    miles to a dearer twin and buy nothing, leaving a pointless zero gallon stop in
+    the plan.
+
+    Anything at or beyond the destination is also dropped. The resampled polyline is
+    marginally shorter than the distance the routing provider reports, so today no
+    candidate can sit past the end, but relying on that is a trap: the feasibility
+    check measures gaps against the tank range and would reject a perfectly drivable
+    trip if one ever did.
+    """
+    within_route = [c for c in candidates if c.offset_miles < total_distance_miles - 1e-9]
+    cheapest_at_offset: dict[int, RouteStation] = {}
+    for candidate in within_route:
+        # Quantise to a thousandth of a mile so floating point noise in the projection
+        # cannot hide two stations that are genuinely at the same point.
+        key = round(candidate.offset_miles * 1000)
+        existing = cheapest_at_offset.get(key)
+        if (
+            existing is None
+            or candidate.station.price_per_gallon < existing.station.price_per_gallon
+        ):
+            cheapest_at_offset[key] = candidate
+    return sorted(cheapest_at_offset.values(), key=lambda c: c.offset_miles)
+
+
+def _drop_empty_stops(plan: FuelPlan) -> FuelPlan:
+    """Remove stops where the plan buys nothing.
+
+    A stop that buys zero gallons is a stop the driver would not make. These appear
+    when initial_fuel_miles already covers the run to a cheaper station, so the
+    departure pump is passed without buying. Dropping them changes no total, since a
+    zero gallon purchase costs nothing and the remaining running totals are unaffected.
+    """
+    kept = tuple(stop for stop in plan.stops if stop.gallons > TOLERANCE)
+    if len(kept) == len(plan.stops):
+        return plan
+    return FuelPlan(
+        stops=kept,
+        total_cost=plan.total_cost,
+        total_gallons=plan.total_gallons,
+        total_distance_miles=plan.total_distance_miles,
+    )
 
 
 def _choose_origin_pump(
@@ -209,6 +264,8 @@ def build_plan(
     resampled_points, cumulative = geo.resample_polyline(route.coordinates, RESAMPLE_SPACING_MILES)
     candidates = stations.stations_along_route(resampled_points, cumulative, corridor_miles)
 
+    candidates = _prune_candidates(candidates, route.distance_miles)
+
     if not candidates:
         raise RouteNotFeasible(
             f"No fuel stations lie within {corridor_miles:.1f} miles of the route. "
@@ -222,12 +279,14 @@ def build_plan(
         origin_pump_label,
     ) = _build_candidate_list(candidates, origin_radius_miles)
 
-    fuel_plan = plan_fuel_stops(
-        ordered_candidates,
-        route.distance_miles,
-        range_miles=range_miles,
-        mpg=mpg,
-        initial_fuel_miles=initial_fuel_miles,
+    fuel_plan = _drop_empty_stops(
+        plan_fuel_stops(
+            ordered_candidates,
+            route.distance_miles,
+            range_miles=range_miles,
+            mpg=mpg,
+            initial_fuel_miles=initial_fuel_miles,
+        )
     )
     compute_ms = (time.perf_counter() - compute_started) * 1000
 

@@ -70,11 +70,19 @@ The build does four things:
 ### The approximation this leaves
 
 Stations are placed at their city centroid, not at the highway exit in the `Address`
-column. A truck stop can sit a few miles from the centre of the town it is named after.
-The corridor width absorbs that error: at the default of 12 miles a station is matched
-to the route if its town centre is within 12 miles of the driven line. Detour miles are
-reported per stop but are not added to the distance driven, since the vehicle is
-assumed to refuel at stops that are effectively on the route.
+column, and a truck stop can sit a few miles from the centre of the town it is named
+after. The corridor width absorbs that error: at the default of 12 miles a station is
+matched to the route if its town centre is within 12 miles of the driven line. Detour
+miles are reported per stop but are not added to the distance driven, since the vehicle
+is assumed to refuel at stops that are effectively on the route.
+
+One consequence needs handling rather than absorbing. Several stations in the same town
+share that centroid exactly, so they land on the same offset along the route. Only the
+cheapest of each such group is kept, because a dearer station at an identical position
+is dominated: any fuel bought there could have been bought next door for less. Leaving
+the others in is not just wasteful, it produces visible nonsense, since the optimiser
+can then "drive" zero miles to a dearer twin and buy nothing, leaving a pointless zero
+gallon stop in the plan.
 
 Parsing the price file into 6626 records takes about 20 ms, and it happens once per
 process at startup, not per request.
@@ -146,9 +154,10 @@ Written out, at a stop at offset `p` with price `c` and `f` miles of fuel in the
 where `reach` is every station within `p + range_miles` and `cheaper` is those among
 them priced strictly below `c` and lying before the destination:
 
-1. If `cheaper` is non empty, take the **nearest** of them. If the destination is closer
-   than that station and within range, buy just enough to finish. Otherwise buy exactly
-   enough to reach it.
+1. If `cheaper` is non empty, buy exactly enough to reach the **nearest** of them.
+   No destination test is needed in this branch: `cheaper` already excludes anything at
+   or past the destination, so the station chosen always lies strictly before the end
+   of the trip.
 2. Otherwise, if the destination is in range, buy exactly enough to finish.
 3. Otherwise fill to capacity and drive to the **cheapest** station in range, breaking a
    price tie by taking the farthest so the trip makes progress.

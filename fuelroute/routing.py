@@ -4,6 +4,7 @@ running Django process (scripts, tests, a future worker).
 
 from __future__ import annotations
 
+import functools
 import os
 import time
 from dataclasses import dataclass
@@ -45,6 +46,17 @@ class Route:
     elapsed_ms: float
 
 
+@functools.lru_cache(maxsize=1)
+def _shared_session() -> requests.Session:
+    """One connection pool for the process.
+
+    A fresh Session per call throws away the pooled TCP and TLS connection, which is
+    the most expensive part of talking to the routing service, and leaks the socket
+    because nothing closes it. Tests inject their own session and never touch this.
+    """
+    return requests.Session()
+
+
 def fetch_route(
     origin: tuple[float, float],
     destination: tuple[float, float],
@@ -56,7 +68,7 @@ def fetch_route(
     Coordinates in and out are (lat, lon). OSRM speaks (lon, lat), so this
     function swaps at the boundary and nowhere else.
     """
-    http = session if session is not None else requests.Session()
+    http = session if session is not None else _shared_session()
     lat1, lon1 = origin
     lat2, lon2 = destination
     url = f"{OSRM_BASE_URL}/route/v1/driving/{lon1},{lat1};{lon2},{lat2}"

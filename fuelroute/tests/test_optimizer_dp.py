@@ -7,7 +7,7 @@ range_miles and initial_fuel_miles are all integers for the same reason.
 
 Every generated instance includes a station at offset_miles == 0.0, standing in
 for the origin pump plan_fuel_stops requires its caller to prepend. That is a
-precondition of the model, not a choice being tested here, views.py picks the
+precondition of the model, not a choice being tested here, planner.py picks the
 real station.
 """
 

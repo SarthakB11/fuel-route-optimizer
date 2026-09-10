@@ -53,18 +53,42 @@ class RoutePlanQuerySerializer(serializers.Serializer):
             raise serializers.ValidationError("initial_fuel_miles must not be negative.")
         return value
 
+    def validate(self, attrs: dict[str, Any]) -> dict[str, Any]:
+        """Reject more starting fuel than the tank can physically hold.
 
-def _stop_payload(stop: Any, index: int) -> dict[str, Any]:
+        Without this the API happily reports a tank arriving somewhere with 700 miles
+        of fuel in a 500 mile tank. It is also the one regime where the feasibility
+        check is wrong, because it measures every gap against range_miles rather than
+        against the fuel actually on board, so it can refuse a leg the vehicle could
+        in fact coast. Ruling the input out is both the honest answer and the smaller
+        change.
+        """
+        initial_fuel = attrs.get("initial_fuel_miles", 0.0)
+        range_miles = attrs.get("range_miles")
+        if range_miles is not None and initial_fuel > range_miles:
+            raise serializers.ValidationError(
+                {
+                    "initial_fuel_miles": (
+                        f"initial_fuel_miles ({initial_fuel:g}) cannot exceed "
+                        f"range_miles ({range_miles:g}); the tank does not hold that much."
+                    )
+                }
+            )
+        return attrs
+
+
+def _stop_payload(stop: Any) -> dict[str, Any]:
     """Round and flatten one FuelStop for the response, tagging it by kind.
 
-    The plan always buys fuel at the caller supplied origin pump first, at
-    offset_miles == 0.0, so index 0 is that departure fill up and every other
-    entry is an ordinary stop encountered along the way.
+    The kind is keyed on the offset, not on the position in the list. When the caller
+    supplies initial_fuel_miles the vehicle can pass the origin pump without buying
+    anything, that stop is dropped from the plan, and the first remaining entry is an
+    ordinary stop somewhere down the road rather than a departure fill up.
     """
     station = stop.station
     return {
         "stop_id": station.stop_id,
-        "kind": "departure_fill_up" if index == 0 else "en_route",
+        "kind": "departure_fill_up" if stop.offset_miles == 0.0 else "en_route",
         "name": station.name,
         "address": station.address,
         "city": station.city,
@@ -110,7 +134,7 @@ def _origin_leg_note(result: PlanResult) -> str:
 def build_response_payload(result: PlanResult, total_ms: float) -> dict[str, Any]:
     """Assemble the full JSON body for a successful route plan response."""
     fuel_plan = result.fuel_plan
-    stops = [_stop_payload(stop, index) for index, stop in enumerate(fuel_plan.stops)]
+    stops = [_stop_payload(stop) for stop in fuel_plan.stops]
     average_price = (
         fuel_plan.total_cost / fuel_plan.total_gallons if fuel_plan.total_gallons > 0 else 0.0
     )
