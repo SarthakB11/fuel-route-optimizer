@@ -96,9 +96,18 @@ the external call count.
 Each stop reports the station, its coordinates, how far along the route it is, how far
 off the route it sits, the price, the gallons to buy, the cost, and the running total.
 
-Errors return `{"error": ..., "detail": ...}` with a status of 400 for a bad parameter
-or an unresolvable place, 422 for a trip that cannot be completed within the tank
-range, and 502 when the routing provider fails. No stack traces are exposed.
+Errors return `{"error": ..., "detail": ...}`:
+
+| Status | When |
+|---|---|
+| 400 | A bad parameter, or a place that cannot be resolved or is ambiguous |
+| 422 | The trip cannot be driven: no road route between the points, no station within the corridor, or a gap wider than the tank range |
+| 502 | The routing provider itself failed |
+
+The distinction between 422 and 502 is deliberate. Asking for Los Angeles to Honolulu
+is not a provider outage, it is a trip that cannot be driven, and the caller should not
+go looking for a fault that is not there. `DEBUG` defaults to off so an unmapped
+exception cannot return an HTML traceback to an API caller.
 
 ### `GET /api/v1/health`
 

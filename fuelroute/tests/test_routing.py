@@ -10,7 +10,7 @@ import pytest
 import requests
 
 from fuelroute import routing
-from fuelroute.routing import RoutingError, fetch_route
+from fuelroute.routing import RouteUnavailable, RoutingError, fetch_route
 
 
 class FakeResponse:
@@ -127,3 +127,16 @@ def test_fetch_route_raises_on_connection_error() -> None:
     session = FakeSession(exception=requests.exceptions.ConnectionError("refused"))
     with pytest.raises(RoutingError):
         fetch_route((35.0, -100.0), (36.2, -98.5), session=session)
+
+
+@pytest.mark.parametrize("code", ["NoRoute", "NoSegment", "NoTrips"])
+def test_no_route_codes_raise_route_unavailable(code: str) -> None:
+    """The codes meaning "cannot be driven" are separated from provider failures."""
+    session = FakeSession(response=FakeResponse(payload={"code": code, "routes": []}))
+    with pytest.raises(RouteUnavailable):
+        fetch_route((35.0, -100.0), (36.2, -98.5), session=session)
+
+
+def test_route_unavailable_is_a_routing_error() -> None:
+    """Callers that only care that routing did not work still catch one type."""
+    assert issubclass(RouteUnavailable, RoutingError)

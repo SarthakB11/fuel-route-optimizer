@@ -20,12 +20,60 @@ CSV_PATH = DATA_DIR / "truckstop-fuel-prices.csv"
 US_MIN_LAT, US_MAX_LAT = 17.0, 72.0
 US_MIN_LON, US_MAX_LON = -180.0, -65.0
 
+# A self contained haversine, deliberately not imported from fuelroute.geo: that module
+# belongs to another part of the build and this test must stand on its own.
+EARTH_RADIUS_MILES = 3958.7613
+
+
+def haversine_miles(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlambda = math.radians(lon2 - lon1)
+    a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2
+    return 2 * EARTH_RADIUS_MILES * math.asin(math.sqrt(a))
+
+
 ALL_STATE_ABBREVIATIONS = {
     "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "DC", "FL", "GA", "HI", "ID",
     "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD", "MA", "MI", "MN", "MS", "MO",
     "MT", "NE", "NV", "NH", "NJ", "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA",
     "RI", "SC", "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY",
 }  # fmt: skip
+
+# Reference coordinates for city center sanity checks, quoted from public knowledge.
+# (city, state) -> (latitude, longitude)
+KNOWN_CITY_COORDINATES = {
+    ("NEW YORK", "NY"): (40.7128, -74.0060),
+    ("NEW YORK CITY", "NY"): (40.7128, -74.0060),
+    ("LOS ANGELES", "CA"): (34.0522, -118.2437),
+    ("CHICAGO", "IL"): (41.8781, -87.6298),
+    ("HOUSTON", "TX"): (29.7604, -95.3698),
+    ("PHOENIX", "AZ"): (33.4484, -112.0740),
+    ("PHILADELPHIA", "PA"): (39.9526, -75.1652),
+    ("SAN ANTONIO", "TX"): (29.4241, -98.4936),
+    ("SAN DIEGO", "CA"): (32.7157, -117.1611),
+    ("DALLAS", "TX"): (32.7767, -96.7970),
+    ("SEATTLE", "WA"): (47.6062, -122.3321),
+    ("MIAMI", "FL"): (25.7617, -80.1918),
+    ("DENVER", "CO"): (39.7392, -104.9903),
+    ("BOSTON", "MA"): (42.3601, -71.0589),
+    ("ATLANTA", "GA"): (33.7490, -84.3880),
+}
+
+# The twenty largest US cities by population, continuing past the fifteen above.
+TOP_TWENTY_EXTRA_CITY_COORDINATES = {
+    ("AUSTIN", "TX"): (30.2672, -97.7431),
+    ("JACKSONVILLE", "FL"): (30.3322, -81.6557),
+    ("FORT WORTH", "TX"): (32.7555, -97.3308),
+    ("SAN JOSE", "CA"): (37.3382, -121.8863),
+    ("COLUMBUS", "OH"): (39.9612, -82.9988),
+    ("CHARLOTTE", "NC"): (35.2271, -80.8431),
+    ("INDIANAPOLIS", "IN"): (39.7684, -86.1581),
+    ("SAN FRANCISCO", "CA"): (37.7749, -122.4194),
+    ("OKLAHOMA CITY", "OK"): (35.4676, -97.5164),
+}
+
+MAX_CITY_CENTER_DRIFT_MILES = 30.0
 
 
 def load_stations() -> dict:
@@ -104,17 +152,38 @@ def test_places_json_resolves_known_cities() -> None:
     payload = load_places()
     by_city_state = payload["by_city_state"]
 
-    los_angeles = by_city_state["LOS ANGELES|CA"]
-    assert 33.5 <= los_angeles[0] <= 34.5
-    assert -119.0 <= los_angeles[1] <= -117.5
-
-    chicago = by_city_state["CHICAGO|IL"]
-    assert 41.5 <= chicago[0] <= 42.2
-    assert -88.0 <= chicago[1] <= -87.3
-
     willow_beach = by_city_state["WILLOW BEACH|AZ"]
     assert 35.0 <= willow_beach[0] <= 36.5
     assert -115.5 <= willow_beach[1] <= -113.5
+
+    for (city, state), (ref_lat, ref_lon) in KNOWN_CITY_COORDINATES.items():
+        key = f"{city}|{state}"
+        assert key in by_city_state, f"{key} missing from places.json"
+        lat, lon = by_city_state[key]
+        drift = haversine_miles(lat, lon, ref_lat, ref_lon)
+        assert drift <= MAX_CITY_CENTER_DRIFT_MILES, f"{key} drifted {drift:.1f} miles"
+
+
+def test_places_json_resolves_twenty_largest_cities() -> None:
+    payload = load_places()
+    by_city_state = payload["by_city_state"]
+    reference = {**KNOWN_CITY_COORDINATES, **TOP_TWENTY_EXTRA_CITY_COORDINATES}
+    # KNOWN_CITY_COORDINATES double books New York under both its colloquial and its
+    # GeoNames primary name, so this is nineteen distinct cities plus the primary name
+    # alias, covering the twenty largest US cities by population.
+    for (city, state), (ref_lat, ref_lon) in reference.items():
+        if city == "NEW YORK CITY":
+            continue
+        key = f"{city}|{state}"
+        assert key in by_city_state, f"{key} missing from places.json"
+        lat, lon = by_city_state[key]
+        drift = haversine_miles(lat, lon, ref_lat, ref_lon)
+        assert drift <= MAX_CITY_CENTER_DRIFT_MILES, f"{key} drifted {drift:.1f} miles"
+
+
+def test_places_json_size_under_four_megabytes() -> None:
+    size = PLACES_PATH.stat().st_size
+    assert size < 4 * 1024 * 1024, f"places.json is {size:,} bytes, over the 4 MB budget"
 
 
 def test_normalize_place_name_documented_cases() -> None:

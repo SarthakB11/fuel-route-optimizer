@@ -57,6 +57,8 @@ class PlanResult:
     route: routing.Route
     fuel_plan: FuelPlan
     origin_price_source: str
+    origin_pump_offset_miles: float
+    origin_pump_label: str
     routing_ms: float
     compute_ms: float
     external_api_calls: int
@@ -78,6 +80,8 @@ class _CachedPayload:
     route: routing.Route
     fuel_plan: FuelPlan
     origin_price_source: str
+    origin_pump_offset_miles: float
+    origin_pump_label: str
     candidate_stations: int
     stations_loaded: int
 
@@ -127,7 +131,7 @@ def _choose_origin_pump(
 
 def _build_candidate_list(
     candidates: list[RouteStation], origin_radius_miles: float
-) -> tuple[list[RouteStation], str]:
+) -> tuple[list[RouteStation], str, float, str]:
     """Choose the origin pump, move it to offset zero, and drop its duplicate.
 
     The station chosen as the origin pump is removed from its original spot in
@@ -140,7 +144,8 @@ def _build_candidate_list(
         station=origin.station, offset_miles=0.0, detour_miles=origin.detour_miles
     )
     ordered = [origin_stop, *sorted(remaining, key=lambda c: c.offset_miles)]
-    return ordered, origin_price_source
+    label = f"{origin.station.name}, {origin.station.city}, {origin.station.state}"
+    return ordered, origin_price_source, origin.offset_miles, label
 
 
 def build_plan(
@@ -185,6 +190,8 @@ def build_plan(
             route=cached.route,
             fuel_plan=cached.fuel_plan,
             origin_price_source=cached.origin_price_source,
+            origin_pump_offset_miles=cached.origin_pump_offset_miles,
+            origin_pump_label=cached.origin_pump_label,
             routing_ms=0.0,
             compute_ms=0.0,
             external_api_calls=0,
@@ -208,7 +215,12 @@ def build_plan(
             "Try a wider corridor_miles."
         )
 
-    ordered_candidates, origin_price_source = _build_candidate_list(candidates, origin_radius_miles)
+    (
+        ordered_candidates,
+        origin_price_source,
+        origin_pump_offset_miles,
+        origin_pump_label,
+    ) = _build_candidate_list(candidates, origin_radius_miles)
 
     fuel_plan = plan_fuel_stops(
         ordered_candidates,
@@ -226,6 +238,8 @@ def build_plan(
             route=route,
             fuel_plan=fuel_plan,
             origin_price_source=origin_price_source,
+            origin_pump_offset_miles=origin_pump_offset_miles,
+            origin_pump_label=origin_pump_label,
             candidate_stations=len(ordered_candidates),
             stations_loaded=stations_loaded,
         ),
@@ -242,6 +256,8 @@ def build_plan(
         route=route,
         fuel_plan=fuel_plan,
         origin_price_source=origin_price_source,
+        origin_pump_offset_miles=origin_pump_offset_miles,
+        origin_pump_label=origin_pump_label,
         routing_ms=route.elapsed_ms,
         compute_ms=compute_ms,
         external_api_calls=route.api_calls,

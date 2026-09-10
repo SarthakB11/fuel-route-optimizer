@@ -13,7 +13,7 @@ from typing import Any
 from django.conf import settings
 from rest_framework import serializers
 
-from fuelroute.planner import PlanResult
+from fuelroute.planner import ORIGIN_SOURCE_NEAREST, PlanResult
 
 MONEY_DP = 2
 PRICE_DP = 3
@@ -82,6 +82,31 @@ def _stop_payload(stop: Any, index: int) -> dict[str, Any]:
     }
 
 
+def _origin_leg_note(result: PlanResult) -> str:
+    """Explain the stop drawn at mile zero, and say so plainly when it is a stand in.
+
+    When the price file has no station near the origin, the departure fill up borrows
+    a station further along the route. The plan's cost is still right, because that
+    price is fixed from the data before the optimiser runs, but the first stop is then
+    drawn at a place the driver has not reached yet. Saying where it actually is beats
+    letting a reader discover the discrepancy in the coordinates.
+    """
+    if result.origin_price_source == ORIGIN_SOURCE_NEAREST:
+        return (
+            "No station in the price file lies within the origin search radius. The "
+            f"departure fill up is priced at {result.origin_pump_label}, which is "
+            f"{result.origin_pump_offset_miles:.1f} miles along the route, and fuel for "
+            "the opening leg is billed at that rate. The stop is listed at offset 0 "
+            "because that is where the vehicle is fuelled, so its coordinates are the "
+            "station's, not the origin's."
+        )
+    return (
+        "The first stop is a fill up at offset 0, taken at the cheapest station near "
+        "the origin. It is billed like any other stop, so the cost accounts for every "
+        "mile driven from mile 0."
+    )
+
+
 def build_response_payload(result: PlanResult, total_ms: float) -> dict[str, Any]:
     """Assemble the full JSON body for a successful route plan response."""
     fuel_plan = result.fuel_plan
@@ -129,11 +154,7 @@ def build_response_payload(result: PlanResult, total_ms: float) -> dict[str, Any
                 "from any initial_fuel_miles supplied."
             ),
             "origin_price_source": result.origin_price_source,
-            "origin_leg_billing": (
-                "The first stop is a fill up at offset 0 that stands in for the origin "
-                "pump. It is billed like any other stop, so the cost accounts for every "
-                "mile driven from mile 0."
-            ),
+            "origin_leg_billing": _origin_leg_note(result),
             "geocoding": (
                 "Stations are geocoded to their city centroid, not the exact highway "
                 "exit, so the corridor width absorbs that offset."

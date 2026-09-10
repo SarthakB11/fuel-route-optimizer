@@ -26,7 +26,7 @@ from fuelroute import stations
 from fuelroute.optimizer import RouteNotFeasible
 from fuelroute.places import LocationError
 from fuelroute.planner import build_plan
-from fuelroute.routing import RoutingError
+from fuelroute.routing import RouteUnavailable, RoutingError
 from fuelroute.serializers import RoutePlanQuerySerializer, build_response_payload
 
 logger = logging.getLogger(__name__)
@@ -61,6 +61,11 @@ class RoutePlanView(APIView):
             )
         except LocationError as exc:
             return _error_response(str(exc), 400)
+        except RouteUnavailable as exc:
+            # The provider worked and the answer is that the trip cannot be driven,
+            # so this is the caller's problem, not a bad gateway. Must be caught
+            # before RoutingError, which it subclasses.
+            return _error_response(str(exc), 422)
         except RoutingError as exc:
             logger.warning("Routing provider failure: %s", exc)
             return _error_response("The routing provider could not compute a route.", 502)

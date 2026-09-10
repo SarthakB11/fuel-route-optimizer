@@ -18,6 +18,7 @@ FIXTURE_INDEX = {
         "LOS ANGELES": [[34.05223, -118.24368, "CA"]],
         "MC CALLA": [[33.34872, -87.01416, "AL"]],
         "HELENA": [[46.59271, -112.03611, "MT"]],
+        "ESPANOLA": [[35.99113, -106.08058, "NM"]],
     },
     "by_city_state": {
         "SPRINGFIELD|IL": [39.78, -89.65],
@@ -25,6 +26,7 @@ FIXTURE_INDEX = {
         "LOS ANGELES|CA": [34.05223, -118.24368],
         "MC CALLA|AL": [33.34872, -87.01416],
         "HELENA|MT": [46.59271, -112.03611],
+        "ESPANOLA|NM": [35.99113, -106.08058],
     },
     "state_names": {
         "ILLINOIS": "IL",
@@ -32,6 +34,7 @@ FIXTURE_INDEX = {
         "CALIFORNIA": "CA",
         "ALABAMA": "AL",
         "MONTANA": "MT",
+        "NEW MEXICO": "NM",
     },
 }
 
@@ -107,3 +110,14 @@ def test_resolve_out_of_bounds_coordinates_raises() -> None:
 def test_resolve_empty_string_raises() -> None:
     with pytest.raises(UnknownLocation):
         resolve_location("")
+
+
+def test_accented_place_names_resolve_to_the_plain_form() -> None:
+    """A caller copying an accented spelling off a map should not get a 400.
+
+    The gazetteer stores the plain ascii spelling, so the resolver folds diacritics
+    before looking a name up. Before it did, the accented characters were replaced by
+    spaces, the key became "ESPA OLA", and the lookup missed.
+    """
+    assert resolve_location("Espa\u00f1ola, NM") == resolve_location("Espanola, NM")
+    assert resolve_location("Espa\u00f1ola, New Mexico") == (35.99113, -106.08058)

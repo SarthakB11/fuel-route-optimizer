@@ -371,11 +371,24 @@ def build_places_payload(
     resolved: list[GeocodedStop],
     min_place_population: int,
     alt_name_min_population: int = ALT_NAME_MIN_POPULATION,
+    alt_names_for_all_stations: bool = False,
 ) -> tuple[dict[str, Any], int]:
     """Assemble the data/places.json offline location index.
 
     Returns the payload and the number of alternate name keys it added, so callers can
     report on the alternate name pass.
+
+    Alternate GeoNames names are indexed for every place at or above
+    alt_name_min_population, which is what makes "New York, NY" resolve even though the
+    GeoNames primary name for the city is "New York City". Setting
+    alt_names_for_all_stations also indexes alternates for every station city regardless
+    of population. Measured on the committed data: with it off, 9606 alternate keys are
+    added and places.json is 3,217,371 bytes. With it on, the roughly 3200 station cities
+    below the population floor add about 15400 more keys, historical names and alternate
+    spellings that are mostly noise rather than colloquial forms anyone is likely to type,
+    growing the file to 5,074,447 bytes. It defaults to False so the file stays under the
+    4 MB budget; every station city's own CSV name is indexed regardless, through the
+    station entries added below.
     """
     # (name_key, state) -> (latitude, longitude, population or None for station only rows)
     merged: dict[tuple[str, str], tuple[float, float, int | None]] = {}
@@ -391,13 +404,17 @@ def build_places_payload(
         merged[(item.stop.state, name_key)] = (item.latitude, item.longitude, None)
 
     # Second pass: alternate GeoNames names, so a colloquial input like "New York, NY"
-    # resolves even though the GeoNames primary name is "New York City". A primary or
-    # ascii name already in merged always wins, so an alternate can never displace it.
+    # resolves even though the GeoNames primary name is "New York City". A place's own
+    # primary or ascii name always wins over an alternate name claim on the same key,
+    # even a place too small to have made it into merged on its own: a real, if tiny,
+    # town called York in some state must not be silently overwritten by a big city's
+    # historical alternate name "York" in the same state. See the all_places check below.
     alt_candidates: dict[tuple[str, str], tuple[float, float, int]] = {}
     for state, name_key, entry, alternate_names in gazetteer.place_rows:
         if not alternate_names:
             continue
-        if entry.population < alt_name_min_population and (state, name_key) not in station_keys:
+        is_station_city = alt_names_for_all_stations and (state, name_key) in station_keys
+        if entry.population < alt_name_min_population and not is_station_city:
             continue
         for alt in alternate_names.split(","):
             alt = alt.strip()
@@ -413,7 +430,10 @@ def build_places_payload(
 
     alt_keys_added = 0
     for key, (latitude, longitude, population) in alt_candidates.items():
-        if key in merged:
+        # gazetteer.all_places holds every feature class P place regardless of
+        # population, so this also protects real places below min_place_population
+        # that never made it into merged on their own.
+        if key in merged or key in gazetteer.all_places:
             continue
         merged[key] = (latitude, longitude, population)
         alt_keys_added += 1
@@ -508,6 +528,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Population floor for indexing a place's GeoNames alternate names",
     )
     parser.add_argument(
+        "--alt-names-for-all-stations",
+        action="store_true",
+        help=(
+            "Also index GeoNames alternate names for every station city regardless of "
+            "population. Pushes places.json well past 4 MB, off by default."
+        ),
+    )
+    parser.add_argument(
         "--generated-at",
         type=str,
         default=None,
@@ -546,7 +574,11 @@ def main(argv: list[str] | None = None) -> int:
         resolved, args.csv, len(us_rows) + non_us_dropped, non_us_dropped, len(stops), generated_at
     )
     places_payload, alt_keys_added = build_places_payload(
-        gazetteer, resolved, args.min_place_population, args.alt_name_min_population
+        gazetteer,
+        resolved,
+        args.min_place_population,
+        args.alt_name_min_population,
+        args.alt_names_for_all_stations,
     )
 
     args.stations_out.parent.mkdir(parents=True, exist_ok=True)

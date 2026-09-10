@@ -22,7 +22,11 @@ SECRET_KEY = os.environ.get(
     "DJANGO_SECRET_KEY",
     "insecure-development-key-override-via-DJANGO_SECRET_KEY",
 )
-DEBUG = _env_bool("DJANGO_DEBUG", True)
+# Off by default so an unmapped exception can never return Django's HTML traceback
+# to an API caller. Set DJANGO_DEBUG=1 locally when you want the debug page. The map
+# page works either way: Leaflet comes from a CDN, so nothing depends on the static
+# file server that DEBUG would otherwise provide.
+DEBUG = _env_bool("DJANGO_DEBUG", False)
 ALLOWED_HOSTS = [
     h.strip() for h in os.environ.get("DJANGO_ALLOWED_HOSTS", "*").split(",") if h.strip()
 ]

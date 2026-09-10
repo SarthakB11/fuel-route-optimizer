@@ -13,7 +13,7 @@ import pytest
 from django.core.cache import cache
 
 from fuelroute import geo, places, routing, stations
-from fuelroute.routing import RoutingError
+from fuelroute.routing import RouteUnavailable, RoutingError
 
 pytestmark = pytest.mark.django_db
 
@@ -419,6 +419,32 @@ def test_routing_error_returns_502(client, configure_dataset, monkeypatch) -> No
     response = client.get(_plan_url(start="Origin City, OK", finish="Finish City, AR"))
     assert response.status_code == 502
     assert "error" in response.json()
+
+
+def test_unroutable_pair_returns_422_not_502(client, configure_dataset, monkeypatch) -> None:
+    """Two points with no road between them is the caller's problem, not an outage.
+
+    OSRM answers correctly with a NoRoute code, so replying 502 would tell the caller
+    the service is broken when in fact the trip cannot be driven. A mainland origin
+    and a Hawaii destination is the realistic way to hit this.
+    """
+
+    class _NoRouteFetch:
+        call_count = 0
+
+        def __call__(self, *args, **kwargs):
+            type(self).call_count += 1
+            raise RouteUnavailable(
+                "No driving route exists between these two locations (routing service "
+                "reported NoRoute)."
+            )
+
+    configure_dataset(ROWS_WITHIN_RADIUS)
+    monkeypatch.setattr(routing, "fetch_route", _NoRouteFetch())
+
+    response = client.get(_plan_url(start="Origin City, OK", finish="Finish City, AR"))
+    assert response.status_code == 422
+    assert "No driving route exists" in response.json()["error"]
 
 
 def test_route_not_feasible_returns_422(client, configure_dataset, monkeypatch) -> None:

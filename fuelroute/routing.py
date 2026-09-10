@@ -16,8 +16,23 @@ OSRM_BASE_URL: str = os.environ.get("OSRM_BASE_URL", "https://router.project-osr
 OSRM_TIMEOUT_SECONDS: float = float(os.environ.get("OSRM_TIMEOUT_SECONDS", "20"))
 
 
+# OSRM answers with one of these when the request was well formed but the two
+# points cannot be connected by road.
+_NO_ROUTE_CODES = frozenset({"NoRoute", "NoSegment", "NoTrips"})
+
+
 class RoutingError(RuntimeError):
     """Raised when OSRM cannot be reached or returns something unusable."""
+
+
+class RouteUnavailable(RoutingError):
+    """No driving route exists between the two points.
+
+    Distinct from a provider failure: OSRM answered correctly, the answer is that
+    the trip cannot be driven. Two points on separate road networks, for example a
+    mainland origin and a Hawaii destination, land here. Callers map this onto a
+    client error rather than a bad gateway, because retrying will not help.
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,13 +74,29 @@ def fetch_route(
         raise RoutingError(f"OSRM request failed: {exc}") from exc
     elapsed_ms = (time.monotonic() - started) * 1000
 
+    # OSRM signals "these two points cannot be connected by road" as HTTP 400 with a
+    # NoRoute code in the body, so the body has to be inspected before the status is
+    # judged. Reading the status first would report an impossible trip as a provider
+    # failure, which sends the caller looking for an outage that is not there.
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = None
+
+    if isinstance(payload, dict):
+        code = payload.get("code")
+        if code in _NO_ROUTE_CODES:
+            raise RouteUnavailable(
+                "No driving route exists between these two locations. They are most "
+                "likely on separate road networks, for example one of them is on an "
+                "island."
+            )
+
     if response.status_code != 200:
         raise RoutingError(f"OSRM returned HTTP {response.status_code}")
 
-    try:
-        payload = response.json()
-    except ValueError as exc:
-        raise RoutingError("OSRM response was not valid JSON") from exc
+    if payload is None:
+        raise RoutingError("OSRM response was not valid JSON")
 
     if not isinstance(payload, dict):
         raise RoutingError("OSRM response body was not a JSON object")
