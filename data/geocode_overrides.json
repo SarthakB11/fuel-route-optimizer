@@ -1,0 +1,27 @@
+{
+  "PUEBLO OF ACOMA, NM": {
+    "latitude": 34.8960604,
+    "longitude": -107.5819746,
+    "source": "Nominatim (OpenStreetMap) search for 'Pueblo of Acoma, New Mexico, USA', historical marker node near the Sky City visitor center on I-40, retrieved 2026-09-10"
+  },
+  "CRESCENT, PA": {
+    "latitude": 40.5563166,
+    "longitude": -80.2287497,
+    "source": "Nominatim (OpenStreetMap) search for 'Crescent Township, Allegheny County, Pennsylvania, USA', township boundary centroid, retrieved 2026-09-10"
+  },
+  "S COFFEYVILLE, OK": {
+    "latitude": 36.9945248,
+    "longitude": -95.6202552,
+    "source": "Nominatim (OpenStreetMap) search for 'South Coffeyville, Oklahoma, USA', town boundary centroid, retrieved 2026-09-10"
+  },
+  "CORINTH, ME": {
+    "latitude": 45.0037427,
+    "longitude": -69.0234445,
+    "source": "Nominatim (OpenStreetMap) search for 'Corinth, Maine, USA', village boundary centroid, retrieved 2026-09-10"
+  },
+  "WILLOW BEACH, AZ": {
+    "latitude": 35.8697801,
+    "longitude": -114.6600654,
+    "source": "Nominatim (OpenStreetMap) search for 'Willow Beach, Arizona, USA', hamlet node, retrieved 2026-09-10"
+  }
+}
