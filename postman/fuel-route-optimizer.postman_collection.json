@@ -19,14 +19,8 @@
         "header": [],
         "url": {
           "raw": "{{base_url}}/api/v1/health",
-          "host": [
-            "{{base_url}}"
-          ],
-          "path": [
-            "api",
-            "v1",
-            "health"
-          ]
+          "host": ["{{base_url}}"],
+          "path": ["api", "v1", "health"]
         },
         "description": "Confirms the service is up and reports how many stations are loaded and when the dataset was generated."
       },
@@ -75,14 +69,8 @@
         "header": [],
         "url": {
           "raw": "{{base_url}}/api/v1/route-plan?start=Seattle, WA&finish=Miami, FL",
-          "host": [
-            "{{base_url}}"
-          ],
-          "path": [
-            "api",
-            "v1",
-            "route-plan"
-          ],
+          "host": ["{{base_url}}"],
+          "path": ["api", "v1", "route-plan"],
           "query": [
             {
               "key": "start",
@@ -121,14 +109,8 @@
         "header": [],
         "url": {
           "raw": "{{base_url}}/api/v1/route-plan?start=Seattle, WA&finish=Miami, FL",
-          "host": [
-            "{{base_url}}"
-          ],
-          "path": [
-            "api",
-            "v1",
-            "route-plan"
-          ],
+          "host": ["{{base_url}}"],
+          "path": ["api", "v1", "route-plan"],
           "query": [
             {
               "key": "start",
@@ -167,14 +149,8 @@
         "header": [],
         "url": {
           "raw": "{{base_url}}/api/v1/route-plan?start=Seattle, WA&finish=Miami, FL&geometry=full",
-          "host": [
-            "{{base_url}}"
-          ],
-          "path": [
-            "api",
-            "v1",
-            "route-plan"
-          ],
+          "host": ["{{base_url}}"],
+          "path": ["api", "v1", "route-plan"],
           "query": [
             {
               "key": "start",
@@ -201,14 +177,8 @@
         "header": [],
         "url": {
           "raw": "{{base_url}}/api/v1/route-plan?start=Los Angeles, CA&finish=New York, NY",
-          "host": [
-            "{{base_url}}"
-          ],
-          "path": [
-            "api",
-            "v1",
-            "route-plan"
-          ],
+          "host": ["{{base_url}}"],
+          "path": ["api", "v1", "route-plan"],
           "query": [
             {
               "key": "start",
@@ -231,14 +201,8 @@
         "header": [],
         "url": {
           "raw": "{{base_url}}/api/v1/route-plan?start=Chicago, IL&finish=Houston, TX",
-          "host": [
-            "{{base_url}}"
-          ],
-          "path": [
-            "api",
-            "v1",
-            "route-plan"
-          ],
+          "host": ["{{base_url}}"],
+          "path": ["api", "v1", "route-plan"],
           "query": [
             {
               "key": "start",
@@ -261,14 +225,8 @@
         "header": [],
         "url": {
           "raw": "{{base_url}}/api/v1/route-plan?start=39.7392,-104.9903&finish=39.0997,-94.5786",
-          "host": [
-            "{{base_url}}"
-          ],
-          "path": [
-            "api",
-            "v1",
-            "route-plan"
-          ],
+          "host": ["{{base_url}}"],
+          "path": ["api", "v1", "route-plan"],
           "query": [
             {
               "key": "start",
@@ -291,14 +249,8 @@
         "header": [],
         "url": {
           "raw": "{{base_url}}/api/v1/route-plan?start=Denver&finish=Chicago",
-          "host": [
-            "{{base_url}}"
-          ],
-          "path": [
-            "api",
-            "v1",
-            "route-plan"
-          ],
+          "host": ["{{base_url}}"],
+          "path": ["api", "v1", "route-plan"],
           "query": [
             {
               "key": "start",
@@ -321,14 +273,8 @@
         "header": [],
         "url": {
           "raw": "{{base_url}}/api/v1/route-plan?start=Denver, CO&finish=Chicago, IL&range_miles=250&mpg=6.5&corridor_miles=25",
-          "host": [
-            "{{base_url}}"
-          ],
-          "path": [
-            "api",
-            "v1",
-            "route-plan"
-          ],
+          "host": ["{{base_url}}"],
+          "path": ["api", "v1", "route-plan"],
           "query": [
             {
               "key": "start",
@@ -377,14 +323,8 @@
         "header": [],
         "url": {
           "raw": "{{base_url}}/api/v1/route-plan?start=Nowhereville, ZZ&finish=Miami, FL",
-          "host": [
-            "{{base_url}}"
-          ],
-          "path": [
-            "api",
-            "v1",
-            "route-plan"
-          ],
+          "host": ["{{base_url}}"],
+          "path": ["api", "v1", "route-plan"],
           "query": [
             {
               "key": "start",
@@ -407,14 +347,8 @@
         "header": [],
         "url": {
           "raw": "{{base_url}}/api/v1/route-plan?start=Denver, CO&finish=Chicago, IL&mpg=0",
-          "host": [
-            "{{base_url}}"
-          ],
-          "path": [
-            "api",
-            "v1",
-            "route-plan"
-          ],
+          "host": ["{{base_url}}"],
+          "path": ["api", "v1", "route-plan"],
           "query": [
             {
               "key": "start",

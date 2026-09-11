@@ -99,7 +99,8 @@ REST_FRAMEWORK = {
     "UNAUTHENTICATED_USER": None,
 }
 
-# Domain configuration. Defaults match the brief: a 500 mile tank at 10 mpg.
+# Domain configuration. The defaults describe the vehicle the project was built
+# around: a 500 mile tank at 10 miles per gallon.
 STATION_DATA_FILE = Path(os.environ.get("STATION_DATA_FILE", BASE_DIR / "data" / "stations.json"))
 PLACE_DATA_FILE = Path(os.environ.get("PLACE_DATA_FILE", BASE_DIR / "data" / "places.json"))
 DEFAULT_RANGE_MILES = float(os.environ.get("DEFAULT_RANGE_MILES", "500"))

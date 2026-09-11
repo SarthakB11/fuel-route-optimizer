@@ -34,10 +34,21 @@ The green pin is the departure fill up. Every other pin is numbered in the order
 stops are made, and clicking one shows the station, the price, the gallons bought
 and the cost.
 
+## Where it comes from
+
+At BeatRoute I have worked on territory cutting: dividing a sales geography into beats
+and routes that field teams can actually drive, which is a routing problem over a road
+network with an optimisation layered on top of it. This project is a standalone
+exploration of a neighbouring shape of that problem, where the optimisation runs along
+one route rather than across a territory, and where the constraints are sharp enough
+to state in a line: call the routing provider once, and answer fast. It is built
+entirely on public data and a public routing service, and shares no code or data with
+that work.
+
 ## What makes this interesting
 
-The exercise has two hard constraints, and everything in the design follows from them:
-call the routing service **once** per request, and be **fast**. This is what one
+The project sets itself two hard constraints, and everything in the design follows from
+them: call the routing service **once** per request, and be **fast**. This is what one
 request does, and where the one external call sits:
 
 ```mermaid
@@ -134,15 +145,15 @@ there is no hidden configuration step.
 
 ### `GET /api/v1/route-plan`
 
-| Parameter            | Default  | Meaning                                                                                                                                                                                       |
-| -------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `start`              | required | Origin. `"Denver, CO"`, `"Denver, Colorado"`, `"Denver Colorado"` or `"39.7392,-104.9903"`. A bare `"Denver"` also works when one namesake dominates by population; `"Springfield"` does not, and the 400 names the states to choose from |
-| `finish`             | required | Destination, same formats                                                                                                                                                                     |
-| `range_miles`        | 500      | How far the vehicle goes on a full tank                                                                                                                                                       |
-| `mpg`                | 10       | Miles per gallon                                                                                                                                                                              |
-| `corridor_miles`     | 12       | How far off the route a station may sit to count                                                                                                                                              |
-| `initial_fuel_miles` | 0        | Miles of fuel already in the tank at the origin                                                                                                                                               |
-| `geometry`           | `simplified` | `simplified` thins the returned route line, `full` returns every vertex the routing provider sent |
+| Parameter            | Default      | Meaning                                                                                                                                                                                                                                   |
+| -------------------- | ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `start`              | required     | Origin. `"Denver, CO"`, `"Denver, Colorado"`, `"Denver Colorado"` or `"39.7392,-104.9903"`. A bare `"Denver"` also works when one namesake dominates by population; `"Springfield"` does not, and the 400 names the states to choose from |
+| `finish`             | required     | Destination, same formats                                                                                                                                                                                                                 |
+| `range_miles`        | 500          | How far the vehicle goes on a full tank                                                                                                                                                                                                   |
+| `mpg`                | 10           | Miles per gallon                                                                                                                                                                                                                          |
+| `corridor_miles`     | 12           | How far off the route a station may sit to count                                                                                                                                                                                          |
+| `initial_fuel_miles` | 0            | Miles of fuel already in the tank at the origin                                                                                                                                                                                           |
+| `geometry`           | `simplified` | `simplified` thins the returned route line, `full` returns every vertex the routing provider sent                                                                                                                                         |
 
 The response has six blocks: `request` with the resolved inputs, `map_url` linking to
 the browser map for the same trip, `fuel_plan` with the ordered stops and the totals,
@@ -256,7 +267,7 @@ One property of minimising dollars and nothing else is worth knowing about befor
 read a plan. Because stopping is free in this model, the optimiser is happy to make
 many small purchases: on the Seattle to Miami route it buys 1.3 gallons at one station
 purely to reach a cheaper one 13 miles later, then fills the tank there. That is
-genuinely the cheapest plan, and it is what the exercise asks for, but a real driver
+genuinely the cheapest plan, and cheapest is what this project optimises for, but a real driver
 also values their time. Adding a fixed penalty per stop and preferring the plan with
 the lowest combined cost would consolidate those, and the greedy would need to become
 a small dynamic program to stay optimal. That is a deliberate non goal here.
@@ -269,13 +280,13 @@ Measured on Seattle to Miami, 3,301 miles, 35,438 geometry vertices from OSRM, 3
 stations matched inside the corridor which collapse to 183 distinct positions, 20 fuel
 stops:
 
-| Stage | Time |
-|---|---|
-| OSRM routing call | 1,200 to 1,600 ms |
-| Local work with `geometry=full`: resample, match stations, optimise, serialise | 73 ms |
-| Local work by default, which adds thinning 35,438 vertices to 3,396 | 174 ms |
-| **Total, cold** | **1,300 to 1,900 ms** |
-| **Total, cached repeat** | **4 to 10 ms, zero external calls** |
+| Stage                                                                          | Time                                |
+| ------------------------------------------------------------------------------ | ----------------------------------- |
+| OSRM routing call                                                              | 1,200 to 1,600 ms                   |
+| Local work with `geometry=full`: resample, match stations, optimise, serialise | 73 ms                               |
+| Local work by default, which adds thinning 35,438 vertices to 3,396            | 174 ms                              |
+| **Total, cold**                                                                | **1,300 to 1,900 ms**               |
+| **Total, cached repeat**                                                       | **4 to 10 ms, zero external calls** |
 
 Los Angeles to New York, 2,793 miles, has the same shape: about 52 ms of local work on
 top of whatever the routing call costs.
@@ -317,8 +328,8 @@ memory. Plans are memoised in Django's cache keyed on the resolved inputs.
 
 ## The dataset
 
-`data/truckstop-fuel-prices.csv` is the supplied price list, committed
-unmodified for provenance. `scripts/build_dataset.py` turns it into
+`data/truckstop-fuel-prices.csv` is the source price list, a snapshot of posted truck
+stop diesel prices by stop, committed unmodified for provenance. `scripts/build_dataset.py` turns it into
 `data/stations.json`:
 
 - drops 620 Canadian rows, since both endpoints must be in the USA
@@ -336,7 +347,7 @@ a dearer station in the same place can never appear in a cheapest plan.
 
 ### Where the price file has no coverage
 
-The supplied file is a snapshot of one pricing feed, not a census of US fuel stops,
+The price file is a snapshot of one pricing feed, not a census of US fuel stops,
 and its coverage is uneven in ways worth knowing before reading a 422:
 
 - **California has 8 stations**, all in the Imperial and Coachella valleys near the

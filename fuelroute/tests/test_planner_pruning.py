@@ -2,7 +2,7 @@
 
 Both behaviours exist because the raw output of the optimiser, while correctly priced,
 can describe stops a driver would never make. These are presentation bugs with a real
-cost: a reviewer reading a plan that says "buy 0.0 gallons here" reasonably concludes
+cost: anyone reading a plan that says "buy 0.0 gallons here" reasonably concludes
 the thing is broken.
 """
 

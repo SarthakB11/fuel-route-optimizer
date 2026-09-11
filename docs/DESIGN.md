@@ -21,7 +21,7 @@ step locally against data that is already in memory.
 
 ## The data problem nobody mentions until they open the file
 
-The supplied price list has seven columns and none of them is a coordinate:
+The price list has seven columns and none of them is a coordinate:
 
 ```
 OPIS Truckstop ID,Truckstop Name,Address,City,State,Rack ID,Retail Price
@@ -89,7 +89,7 @@ process at startup, not per request.
 
 ## Choosing the routing provider
 
-The requirement was a free map and routing API, called as little as possible.
+The constraint I set was a free map and routing API, called as little as possible.
 
 **OSRM's public demo server** is what the service uses. It needs no API key and no
 account, and a single request to `/route/v1/driving/{coords}?overview=full&geometries=geojson`
@@ -127,7 +127,7 @@ coast route takes about 28 ms.
 
 ## The fuel stop algorithm
 
-This is the part the exercise is really asking about, so it is worth stating precisely.
+This is the heart of the project, so it is worth stating precisely.
 
 ### The model
 
