@@ -242,9 +242,18 @@
     ></script>
     <script>
       const map = L.map("map").setView([39.5, -98.35], 4);
-      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-        maxZoom: 18,
-        attribution: "&copy; OpenStreetMap contributors",
+      // CARTO's basemap rather than tile.openstreetmap.org. OSM's volunteer run
+      // tile servers block anonymous applications under their usage policy, and
+      // whether a given request is blocked depends on the client, so a page that
+      // works on one machine can show "Access blocked" tiles on another. CARTO
+      // serves OSM derived tiles for this kind of use without a key, and the light
+      // style keeps a blue route line and numbered pins readable.
+      L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
+        maxZoom: 19,
+        subdomains: "abcd",
+        attribution:
+          '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors ' +
+          '&copy; <a href="https://carto.com/attributions">CARTO</a>',
       }).addTo(map);
 
       let routeLayer = null;
