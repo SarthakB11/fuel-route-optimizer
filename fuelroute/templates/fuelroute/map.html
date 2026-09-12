@@ -242,19 +242,21 @@
     ></script>
     <script>
       const map = L.map("map").setView([39.5, -98.35], 4);
-      // CARTO's basemap rather than tile.openstreetmap.org. OSM's volunteer run
-      // tile servers block anonymous applications under their usage policy, and
-      // whether a given request is blocked depends on the client, so a page that
-      // works on one machine can show "Access blocked" tiles on another. CARTO
-      // serves OSM derived tiles for this kind of use without a key, and the light
-      // style keeps a blue route line and numbered pins readable.
-      L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
-        maxZoom: 19,
-        subdomains: "abcd",
-        attribution:
-          '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors ' +
-          '&copy; <a href="https://carto.com/attributions">CARTO</a>',
-      }).addTo(map);
+      // Esri's World Street Map rather than tile.openstreetmap.org or CARTO. OSM's
+      // volunteer run tile servers block anonymous applications under their usage
+      // policy, and whether a request is blocked depends on the client, so a page
+      // that works on one machine can show "Access blocked" tiles on another. CARTO
+      // now watermarks its basemaps without an API key. Esri serves these tiles
+      // for attributed use with no key, which is what a clean checkout needs.
+      L.tileLayer(
+        "https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}",
+        {
+          maxZoom: 19,
+          attribution:
+            'Tiles &copy; <a href="https://www.esri.com/">Esri</a>, ' +
+            '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+        },
+      ).addTo(map);
 
       let routeLayer = null;
       let markerLayer = L.layerGroup().addTo(map);
