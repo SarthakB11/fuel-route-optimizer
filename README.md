@@ -34,9 +34,11 @@ The green pin is the departure fill up. Every other pin is numbered in the order
 stops are made, and clicking one shows the station, the price, the gallons bought
 and the cost.
 
-**Five minute walkthrough:** [docs/demo.mp4](docs/demo.mp4) shows the API in Postman
-(a cold call, then the cached one), the three pieces of code that matter, the test
-suite, and the map, with captions.
+**Five minute walkthrough**, with captions: the API in Postman (a cold call, then the
+cached one), the three pieces of code that matter, the test suite, and the map. The
+same file is committed as [docs/demo.mp4](docs/demo.mp4).
+
+https://github.com/user-attachments/assets/d539ae2e-91be-40ce-8845-79c9b8bb53be
 
 ## Where it comes from
 
