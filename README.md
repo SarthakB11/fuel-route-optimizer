@@ -34,6 +34,10 @@ The green pin is the departure fill up. Every other pin is numbered in the order
 stops are made, and clicking one shows the station, the price, the gallons bought
 and the cost.
 
+**Five minute walkthrough:** [docs/demo.mp4](docs/demo.mp4) shows the API in Postman
+(a cold call, then the cached one), the three pieces of code that matter, the test
+suite, and the map, with captions.
+
 ## Where it comes from
 
 At BeatRoute I have worked on territory cutting: dividing a sales geography into beats
