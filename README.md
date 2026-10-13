@@ -42,7 +42,7 @@ https://github.com/user-attachments/assets/d539ae2e-91be-40ce-8845-79c9b8bb53be
 
 ## Where it comes from
 
-At BeatRoute I have worked on territory cutting: dividing a sales geography into beats
+In my day job I have worked on territory cutting: dividing a sales geography into beats
 and routes that field teams can actually drive, which is a routing problem over a road
 network with an optimisation layered on top of it. This project is a standalone
 exploration of a neighbouring shape of that problem, where the optimisation runs along
